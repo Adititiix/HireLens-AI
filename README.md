@@ -1,4 +1,4 @@
-# ResumeIQ AI v3 — Full Product Upgrade
+# HireLens AI — Full Product Upgrade
 
 ## What's New in v3
 
