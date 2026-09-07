@@ -1,4 +1,6 @@
-const User=require("../models/User");const{generateToken}=require("../middleware/auth");
+const User = require("../models/User");
+const { generateToken } = require("../middleware/auth");
+const admin = require("../config/firebaseAdmin");
 const register=async(req,res)=>{
   try{
     const{name,email,password}=req.body;
@@ -17,5 +19,70 @@ const login=async(req,res)=>{
     res.json({message:"Login successful",token,user:user.toJSON()});
   }catch(err){console.error("Login:",err);res.status(500).json({error:"Login failed."});}
 };
+const googleLogin = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({
+        error: "Firebase ID token is required.",
+      });
+    }
+
+    const decodedToken = await admin.verifyIdToken(idToken);
+
+    const {
+      email,
+      name,
+      picture,
+      uid,
+    } = decodedToken;
+
+    if (!email) {
+      return res.status(400).json({
+        error: "Google account email is required.",
+      });
+    }
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      user = await User.create({
+        name: name || email.split("@")[0],
+        email: email.toLowerCase(),
+        googleId: uid,
+        avatarUrl: picture || null,
+      });
+    } else {
+      user.lastActive = Date.now();
+
+      if (!user.googleId) {
+        user.googleId = uid;
+      }
+
+      if (picture && !user.avatarUrl) {
+        user.avatarUrl = picture;
+      }
+
+      await user.save({
+        validateBeforeSave: false,
+      });
+    }
+
+    const token = generateToken(user._id);
+
+    res.json({
+      message: "Google login successful",
+      token,
+      user: user.toJSON(),
+    });
+  } catch (err) {
+    console.error("Google Login:", err);
+
+    res.status(401).json({
+      error: "Google authentication failed.",
+    });
+  }
+};
 const getMe=(req,res)=>res.json({user:req.user});
-module.exports={register,login,getMe};
+module.exports={register,login,googleLogin,getMe};

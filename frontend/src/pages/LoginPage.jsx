@@ -4,10 +4,12 @@ import{motion}from"framer-motion";
 import{Zap,AlertCircle}from"lucide-react";
 import{useAuth}from"../context/AuthContext";
 import{Spinner}from"../components/ui";
+import { signInWithGoogle } from "../services/firebase";
+import axios from "axios";
 
 function GoogleButton({label}){
   return(
-    <button type="button" onClick={()=>alert("Google OAuth: See docs/GOOGLE_OAUTH.md for setup instructions.")}
+    <button type="button" onClick={handleGoogleLogin}
       className="w-full flex items-center justify-center gap-2.5 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
       <svg className="w-4 h-4" viewBox="0 0 24 24">
         <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -19,7 +21,37 @@ function GoogleButton({label}){
     </button>
   );
 }
+async function handleGoogleLogin() {
+  try {
+    const result = await signInWithGoogle();
 
+    const firebaseUser = result.user;
+
+    const idToken = await firebaseUser.getIdToken();
+
+    const response = await axios.post(
+      "/api/auth/google-login",
+      {
+        idToken,
+      }
+    );
+
+    const { token } = response.data;
+
+    localStorage.setItem("riq_token", token);
+
+    window.location.href = "/";
+  } catch (error) {
+    console.error("Google Sign-In Error:", error);
+
+    const message =
+      error?.response?.data?.error ||
+      error?.message ||
+      "Google Sign-In failed.";
+
+    alert(message);
+  }
+}
 function AuthCard({title,subtitle,children}){
   return(
     <main className="min-h-[calc(100vh-56px)] flex items-center justify-center px-4 py-12">
