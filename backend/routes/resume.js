@@ -1,0 +1,14 @@
+const express=require("express");
+const{protect}=require("../middleware/auth");
+const{upload,handleUploadError}=require("../middleware/upload");
+const c=require("../controllers/resumeController");
+const router=express.Router();
+router.post("/upload-anon",upload.single("resume"),handleUploadError,c.uploadResumeAnon);
+router.use(protect);
+router.post("/upload",upload.single("resume"),handleUploadError,c.uploadResume);
+router.get("/",c.listResumes);
+router.get("/:id",c.getResume);
+router.put("/:id",c.updateResume);
+router.delete("/:id",c.deleteResume);
+router.post("/:id/version",c.saveVersion);
+module.exports=router;
