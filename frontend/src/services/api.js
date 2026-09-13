@@ -23,6 +23,7 @@ export const resumeAPI = {
 export const analysisAPI = {
   run:(resumeId,jdText)=>api.post("/analysis/run",{resumeId,jdText}),
   get:(resumeId)=>api.get(`/analysis/${resumeId}`),
+  getById:(id)=>api.get(`/analysis/detail/${id}`), // TASK 8 FIX: fetch ONE specific historical analysis by its own _id
   list:()=>api.get("/analysis/history"),
 };
 export const jdAPI = {

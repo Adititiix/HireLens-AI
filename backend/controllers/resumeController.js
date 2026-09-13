@@ -14,22 +14,36 @@ async function parseFile(file){
     return d.text;
   }
   if(ext===".docx"||file.mimetype==="application/vnd.openxmlformats-officedocument.wordprocessingml.document"){
-    const r=await mammoth.extractRawText({buffer:file.buffer});return r.value;
+    // TASK 1 FIX: switched from mammoth.extractRawText (plain text, loses all
+    // bullet/list structure) to mammoth.convertToHtml + a lightweight block-level
+    // parser below. This preserves <li> list-item boundaries as bullets, which
+    // extractRawText silently collapsed into ordinary paragraph text before —
+    // that collapse was a real source of "bullets mixed into wrong section".
+    const r=await mammoth.convertToHtml({buffer:file.buffer});
+    return htmlToStructuredText(r.value);
   }
   return file.buffer.toString("utf-8");
+}
+
+// Minimal, dependency-free HTML→line-based-text transform. Converts each
+// block-level element into its own line, and <li> into a "• " prefixed line,
+// so downstream parseResumeText() sees the same bullet/paragraph boundaries
+// a human would see in the DOCX, instead of one run-on paragraph.
+function htmlToStructuredText(html){
+  let out = html
+    .replace(/<li[^>]*>/gi, "\n• ")
+    .replace(/<\/li>/gi, "")
+    .replace(/<\/(p|h[1-6]|div|tr)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")            // strip remaining tags
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+  return out.split("\n").map(l=>l.trim()).filter(Boolean).join("\n");
 }
 
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2);}
 
 // ── FIX (requirement #1): recursive deep merge ────────────────────────────
-// Replaces the old shallow spread `{...old,...new}` which silently wiped
-// sibling keys inside nested objects (skills, experience entries, etc.)
-// whenever a PUT only included a partial nested object. Arrays are treated
-// as atomic values (the incoming array fully replaces the old one — this
-// matches how the editor always sends complete arrays for lists like
-// bullets/technologies/otherLinks, so no data is lost), while plain nested
-// objects are merged key-by-key recursively so partial updates never
-// clobber sibling fields they didn't intend to touch.
 function isPlainObject(v){
   return v!==null && typeof v==="object" && !Array.isArray(v) && !(v instanceof Date);
 }
@@ -42,105 +56,254 @@ function deepMerge(target, source){
     if(isPlainObject(sVal) && isPlainObject(tVal)){
       out[key] = deepMerge(tVal, sVal);
     } else {
-      out[key] = sVal; // arrays, primitives, or new keys — assign directly
+      out[key] = sVal;
     }
   }
   return out;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// TASK 1: STRUCTURED RESUME EXTRACTION (rewritten)
+//
+// ROOT CAUSE of the reported bugs:
+//   The old parser treated ANY non-bullet line under 100 chars as the start
+//   of a brand-new project/experience entry. A line like
+//     "TrustVault | Python, FastAPI, JWT, SQLite, AES-256-GCM, X25519 ECDH Aug 2026"
+//   became `name` = the entire line (technologies stayed empty), and any
+//   short unrelated line elsewhere could spuriously start a phantom new
+//   project — this is exactly the "projects merge / split incorrectly"
+//   symptom reported.
+//
+// FIX:
+//   A new entry (project or experience) is now only started when a line
+//   matches a real title-line SHAPE:
+//     "<Name> | <comma, separated, tech, list> [trailing Month Year(s)]"
+//   for projects, or
+//     "<Title> | <Company> [(Location)] [trailing date range]"
+//   for experience. Technologies and dates are extracted into their own
+//   fields instead of being left inside `name`/`title`. Any line that does
+//   NOT match this shape while an entry is open is treated as a continuation
+//   (appended as a bullet if bullet-prefixed, otherwise ignored rather than
+//   silently starting a bogus new entry).
+// ══════════════════════════════════════════════════════════════════════════
+
+// Expanded section heading recognition (Task: SECTION DETECTION)
+const SECTION_HEADINGS = {
+  summary:        /^(summary|professional summary|career summary|profile|objective|about me)$/i,
+  experience:     /^(experience|work experience|professional experience|employment history|career history)$/i,
+  projects:       /^(projects|personal projects|academic projects|key projects|selected projects)$/i,
+  skills:         /^(skills|technical skills|technologies|technical expertise|core skills|skills\s*&\s*technologies|technology stack|tech stack|technical proficiencies)$/i,
+  education:      /^(education|academic background)$/i,
+  certifications: /^(certifications?|certificates?|licenses?|credentials)$/i,
+  achievements:   /^(achievements?|awards?|honors?)$/i,
+};
+
+const MONTH = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december";
+// Matches a trailing date or date-range at the end of a line, e.g. "Aug 2026",
+// "Jun 2025 – Dec 2025", "2019 - 2023", "Present".
+const TRAILING_DATE_RE = new RegExp(
+  `((?:(?:${MONTH})\\.?\\s+)?\\d{4}\\s*(?:[-–—]\\s*(?:(?:(?:${MONTH})\\.?\\s+)?\\d{4}|present))?)\\s*$`, "i"
+);
+
+const CONTACT_LINE_RE = /@|linkedin\.com|github\.com|leetcode\.com|hackerrank\.com|https?:\/\/|www\.|^\+?\d[\d\s().-]{7,}\d$/i;
+
+function getHeading(line){
+  const clean = line.replace(/[:\-–_]+$/,"").trim();
+  for(const [key, re] of Object.entries(SECTION_HEADINGS)){
+    if(re.test(clean)) return key;
+  }
+  return null;
+}
+
+function isBulletLine(l){ return /^[•\-–*▪]\s*/.test(l) || /^\d+\.\s*/.test(l); }
+function stripBullet(l){ return l.replace(/^[•\-–*▪]\s*/,"").replace(/^\d+\.\s*/,"").trim(); }
+
+// Does this line look like a genuine "<Title> | <Meta>" entry header?
+// Requires a pipe AND (a comma-separated list on the right, OR a trailing
+// date) — this is what distinguishes a real title line from an ordinary
+// bullet or wrapped sentence that merely happens to be short.
+function looksLikeEntryHeader(line){
+  if(isBulletLine(line)) return false;
+  if(!line.includes("|")) return false;
+  const [, meta=""] = line.split(/\|(.*)/s).map(s=>s.trim());
+  const hasCommaList = /,/.test(meta);
+  const hasDate = TRAILING_DATE_RE.test(meta) && /\d{4}/.test(meta);
+  return hasCommaList || hasDate;
+}
+
+function splitNameAndMeta(line){
+  const idx = line.indexOf("|");
+  const name = line.slice(0, idx).trim();
+  const meta = line.slice(idx+1).trim();
+  const dateMatch = meta.match(TRAILING_DATE_RE);
+  const date = (dateMatch && dateMatch[1] && /\d{4}/.test(dateMatch[1])) ? dateMatch[1].trim() : "";
+  const rest = date ? meta.slice(0, meta.length - dateMatch[0].length).trim().replace(/[,\s]+$/,"") : meta;
+  return { name, rest, date };
+}
+
+function parseDateRange(dateStr){
+  if(!dateStr) return { startDate:"", endDate:"" };
+  const parts = dateStr.split(/[-–—]/).map(s=>s.trim()).filter(Boolean);
+  if(parts.length>=2) return { startDate:parts[0], endDate:parts[1] };
+  return { startDate:parts[0]||"", endDate:"" };
+}
+
+// Tolerates an optional space after the period (PDF extraction sometimes
+// yields "B. Tech" instead of "B.Tech" — the old inline pattern required them
+// adjacent and silently failed to detect the degree line at all, which cascaded
+// into gpa/degree both staying empty since the surrounding if-block never ran).
+const DEGREE_RE = /\b(b\.?\s?s\.?|b\.?\s?a\.?|b\.?\s?tech|m\.?\s?s\.?|m\.?\s?tech|ph\.?\s?d\.?|bachelor|master|associate|mba)\b/i;
+
+// Skills-section "Label : item1, item2, item3" line → schema-appropriate bucket.
+// Maps into the EXISTING Resume schema buckets (technical/tools/cloud/soft/
+// languages/programmingLanguages/frameworks/libraries/databases/developerTools) —
+// no new schema fields invented, per "keep the current schema" instruction.
+const SKILL_LABEL_MAP = [
+  { re: /^languages?$/i,                         bucket: "programmingLanguages" },
+  { re: /^(frameworks?|libraries)(\/|\s|$)/i,     bucket: "frameworks" },
+  { re: /^databases?$/i,                          bucket: "databases" },
+  { re: /^(developer tools|tools)$/i,             bucket: "developerTools" },
+  { re: /^cloud$/i,                                bucket: "cloud" },
+  { re: /^soft skills?$/i,                        bucket: "soft" },
+];
+
+function parseSkillsLine(line, skills){
+  const m = line.match(/^([A-Za-z /&]{2,30}?)\s*:\s*(.+)$/);
+  if(!m) return false;
+  const [, label, itemsStr] = m;
+  const items = itemsStr.split(",").map(s=>s.trim()).filter(Boolean);
+  if(!items.length) return false;
+  const match = SKILL_LABEL_MAP.find(e=>e.re.test(label.trim()));
+  const bucket = match ? match.bucket : "technical"; // AI/ML, Core CS, Security, etc. → general bucket (no dedicated field exists)
+  skills[bucket] = [...new Set([...(skills[bucket]||[]), ...items])];
+  skills.technical = [...new Set([...(skills.technical||[]), ...items])]; // always keep the flat legacy list in sync
+  return true;
+}
+
 function parseResumeText(text){
-  const lines=text.split("\n").map(l=>l.trim()).filter(Boolean);
-  const emailMatch=text.match(/[\w.\-]+@[\w.\-]+\.\w+/);
-  const phoneMatch=text.match(/[\+]?[\d][\d\s\-\(\)]{7,}/);
-  const linkedinMatch=text.match(/linkedin\.com\/in\/[\w\-]+/i);
-  const githubMatch=text.match(/github\.com\/[\w\-]+/i);
-  const nameLine=lines.find(l=>l.length>2&&l.length<60&&!l.includes("@")&&!/^\+?\d/.test(l)&&!l.startsWith("http"));
+  const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
 
-  const bullets=[];
-  const exp=[];let curExp=null;
-  const edu=[];let curEdu=null;
-  const projs=[];let curProj=null;
-  const certs=[];let curCert=null;
+  const emailMatch    = text.match(/[\w.\-]+@[\w.\-]+\.\w+/);
+  const phoneMatch     = text.match(/[\+]?[\d][\d\s\-\(\)]{7,}/);
+  const linkedinMatch  = text.match(/linkedin\.com\/[\w\-\/]+/i);
+  const githubMatch    = text.match(/github\.com\/[\w\-]+/i);
+  const leetcodeMatch  = text.match(/leetcode\.com\/[\w\-\/]+/i);
+  const nameLine = lines.find(l =>
+    l.length>2 && l.length<60 && !CONTACT_LINE_RE.test(l) && getHeading(l)===null
+  );
 
-  const isExp=l=>/^(experience|work|employment|career)/i.test(l);
-  const isEdu=l=>/^(education|academic|degree|qualification)/i.test(l);
-  const isProj=l=>/^(project|portfolio)/i.test(l);
-  const isCert=l=>/^(certification|certificate|credential|license)/i.test(l);
-  const isSection=l=>isExp(l)||isEdu(l)||isProj(l)||isCert(l)||/^(skill|summary|objective|achievement|additional)/i.test(l);
-  const isBullet=l=>/^[•\-*–]\s/.test(l)||/^\d+\.\s/.test(l);
-  const isDate=l=>/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4})/i.test(l);
+  const skills = { programmingLanguages:[], frameworks:[], libraries:[], databases:[], cloud:[], developerTools:[], soft:[], technical:[], tools:[], languages:[] };
+  const exp = [], edu = [], projs = [], certs = [];
+  let curExp=null, curEdu=null, curProj=null;
 
-  let section="none";
-  for(const line of lines){
-    const ul=line.toLowerCase();
-    if(isSection(line)){
-      if(isExp(line))section="exp";
-      else if(isEdu(line))section="edu";
-      else if(isProj(line))section="proj";
-      else if(isCert(line))section="cert";
-      else section="other";
-      if(curExp)exp.push(curExp);curExp=null;
-      if(curEdu)edu.push(curEdu);curEdu=null;
-      if(curProj)projs.push(curProj);curProj=null;
+  let section = null;
+
+  for(const rawLine of lines){
+    if(CONTACT_LINE_RE.test(rawLine) && section!==null && getHeading(rawLine)===null){
+      // Contact/header noise appearing mid-document (e.g. a repeated footer) — skip, never
+      // let it get assigned into whatever section happens to be open.
       continue;
     }
-    if(section==="exp"){
-      if(!isBullet(line)&&!isDate(line)&&line.length>3&&line.length<100){
-        if(curExp)exp.push(curExp);
-        curExp={id:uid(),title:line,company:"",location:"",startDate:"",endDate:"",current:false,description:"",bullets:[]};
-      } else if(isBullet(line)&&curExp){
-        curExp.bullets.push(line.replace(/^[•\-*–]\s*/,"").trim());
-      } else if(isDate(line)&&curExp){
-        const parts=line.split(/[-–—to]+/i).map(s=>s.trim());
-        curExp.startDate=parts[0]||"";curExp.endDate=parts[1]||"Present";
+
+    const heading = getHeading(rawLine);
+    if(heading){
+      if(curExp) exp.push(curExp);  curExp=null;
+      if(curEdu) edu.push(curEdu);  curEdu=null;
+      if(curProj) projs.push(curProj); curProj=null;
+      section = heading;
+      continue;
+    }
+
+    if(section==="experience"){
+      if(looksLikeEntryHeader(rawLine)){
+        if(curExp) exp.push(curExp);
+        const { name, rest, date } = splitNameAndMeta(rawLine);
+        const { startDate, endDate } = parseDateRange(date);
+        curExp = { id:uid(), title:name, company:rest, location:"", startDate, endDate, current:/present/i.test(endDate), description:"", bullets:[] };
+      } else if(isBulletLine(rawLine) && curExp){
+        curExp.bullets.push(stripBullet(rawLine));
+      } else if(curExp && !curExp.company && rawLine.length<80){
+        // First non-bullet line right after a bare title (no "|") — treat as company/location.
+        curExp.company = rawLine;
       }
-    } else if(section==="edu"){
-      if(/b\.?s\.?|b\.?a\.?|m\.?s\.?|ph\.?d\.?|bachelor|master|associate|mba/i.test(line)){
-        if(curEdu)edu.push(curEdu);
-        curEdu={id:uid(),degree:line,institution:"",location:"",startDate:"",endDate:"",gpa:"",honors:""};
-      } else if(curEdu){
-        if(/gpa/i.test(line)){const m=line.match(/(\d+\.\d+)/);if(m)curEdu.gpa=m[1];}
-        else if(isDate(line)){const p=line.split(/[-–]+/).map(s=>s.trim());curEdu.startDate=p[0];curEdu.endDate=p[1]||"";}
-        else if(!curEdu.institution)curEdu.institution=line;
+    } else if(section==="projects"){
+      if(looksLikeEntryHeader(rawLine)){
+        if(curProj) projs.push(curProj);
+        const { name, rest, date } = splitNameAndMeta(rawLine);
+        const technologies = rest.split(",").map(s=>s.trim()).filter(Boolean);
+        curProj = { id:uid(), name, description:"", technologies, githubUrl:"", liveDemoUrl:"", additionalUrl:"" };
+      } else if(isBulletLine(rawLine) && curProj){
+        const clean = stripBullet(rawLine);
+        if(/github\.com/i.test(clean)) curProj.githubUrl = clean;
+        else if(/live demo|https?:\/\//i.test(clean) && !curProj.liveDemoUrl) curProj.liveDemoUrl = clean.match(/https?:\/\/\S+/)?.[0] || clean;
+        else curProj.description += (curProj.description ? " " : "") + clean;
+      } else if(curProj && /github\.com/i.test(rawLine)){
+        curProj.githubUrl = rawLine.trim();
       }
-    } else if(section==="proj"){
-      if(!isBullet(line)&&line.length>2&&line.length<100){
-        if(curProj)projs.push(curProj);
-        curProj={id:uid(),name:line,description:"",technologies:[],githubUrl:"",liveDemoUrl:"",additionalUrl:""};
-      } else if(curProj){
-        if(/github\.com/i.test(line))curProj.githubUrl=line.trim();
-        else if(isBullet(line))curProj.description+=(curProj.description?" ":"")+line.replace(/^[•\-*–]\s*/,"").trim();
+    } else if(section==="education"){
+      if(DEGREE_RE.test(rawLine) || TRAILING_DATE_RE.test(rawLine)){
+        if(curEdu && curEdu.degree) edu.push(curEdu), curEdu=null;
+        if(!curEdu) curEdu = { id:uid(), degree:"", institution:"", location:"", startDate:"", endDate:"", gpa:"", honors:"" };
+        const gpaMatch = rawLine.match(/(?:cgpa|gpa)\s*:?\s*(\d+\.?\d*)/i);
+        if(gpaMatch) curEdu.gpa = gpaMatch[1];
+        const dateMatch = rawLine.match(TRAILING_DATE_RE);
+        if(dateMatch && /\d{4}/.test(dateMatch[1])){
+          const { startDate, endDate } = parseDateRange(dateMatch[1].trim());
+          curEdu.startDate = startDate; curEdu.endDate = endDate;
+        }
+        if(DEGREE_RE.test(rawLine) && !curEdu.degree){
+          curEdu.degree = rawLine.replace(TRAILING_DATE_RE,"").replace(/\s*(?:cgpa|gpa)\s*:?\s*\d+\.?\d*(?:\/\d+)?\s*$/i,"").trim();
+        } else if(!curEdu.institution && !gpaMatch){
+          curEdu.institution = rawLine.replace(TRAILING_DATE_RE,"").trim();
+        }
+      } else if(curEdu && !curEdu.institution){
+        curEdu.institution = rawLine;
       }
-    } else if(section==="cert"){
-      if(line.length>3){
-        const yr=line.match(/\d{4}/);
-        certs.push({id:uid(),name:line.replace(/\d{4}/,"").trim(),provider:"",issueDate:yr?yr[0]:"",credentialId:"",credentialUrl:""});
+    } else if(section==="certifications"){
+      if(rawLine.length>3){
+        const yr = rawLine.match(/\d{4}/);
+        certs.push({ id:uid(), name: rawLine.replace(/\d{4}/,"").trim(), provider:"", issueDate: yr?yr[0]:"", credentialId:"", credentialUrl:"" });
+      }
+    } else if(section==="skills"){
+      if(!parseSkillsLine(rawLine, skills)){
+        // No "Label:" pattern — treat as a bare comma-separated skills line.
+        const items = rawLine.split(",").map(s=>s.trim()).filter(Boolean);
+        if(items.length){ skills.technical = [...new Set([...skills.technical, ...items])]; }
       }
     }
   }
-  if(curExp)exp.push(curExp);
-  if(curEdu)edu.push(curEdu);
-  if(curProj)projs.push(curProj);
+  if(curExp) exp.push(curExp);
+  if(curEdu && curEdu.degree) edu.push(curEdu);
+  if(curProj) projs.push(curProj);
 
+  // Fallback keyword scan (kept from original implementation) in case Skills
+  // section wasn't headed clearly, or to backstop the NLP-extracted list.
   const SKILL_KW=["python","javascript","typescript","java","react","node.js","aws","docker",
     "kubernetes","mongodb","postgresql","mysql","redis","git","agile","rest api","graphql",
     "machine learning","deep learning","tensorflow","pytorch","css","html","linux","sql","ci/cd"];
   const tl=text.toLowerCase();
-  const technical=SKILL_KW.filter(s=>new RegExp("\\b"+s.replace(/\./g,"\\.")+"\\b").test(tl));
+  const kwFound = SKILL_KW.filter(s=>new RegExp("\\b"+s.replace(/\./g,"\\.")+"\\b").test(tl));
+  skills.technical = [...new Set([...skills.technical, ...kwFound])];
+  if(!skills.programmingLanguages.length) skills.programmingLanguages = kwFound;
+
+  const summaryStart = lines.findIndex(l=>getHeading(l)==="summary");
+  let summary = "";
+  if(summaryStart!==-1){
+    const summaryLines=[];
+    for(let i=summaryStart+1;i<lines.length;i++){
+      if(getHeading(lines[i])) break;
+      summaryLines.push(lines[i]);
+    }
+    summary = summaryLines.join(" ");
+  }
 
   return {
-    name:nameLine||"",email:emailMatch?emailMatch[0]:"",phone:phoneMatch?phoneMatch[0]:"",
-    location:"",linkedin:linkedinMatch?linkedinMatch[0]:"",github:githubMatch?githubMatch[0]:"",
-    portfolio:"",leetcode:"",hackerrank:"",otherLinks:[],
-    summary:"",
-    skills:{
-      // Seed the new "Programming Languages" category with the same detected list as a sensible
-      // default landing spot (requirement #2). The other new categories start empty — the user
-      // can move entries between chip groups manually. Legacy fields kept in sync for compatibility.
-      programmingLanguages:technical,frameworks:[],libraries:[],databases:[],cloud:[],developerTools:[],soft:[],
-      technical,tools:[],languages:[],
-    },
-    experience:exp,education:edu,projects:projs,certifications:certs,achievements:[],additionalInfo:"",
+    name:nameLine||"", email:emailMatch?emailMatch[0]:"", phone:phoneMatch?phoneMatch[0]:"",
+    location:"", linkedin:linkedinMatch?linkedinMatch[0]:"", github:githubMatch?githubMatch[0]:"",
+    portfolio:"", leetcode:leetcodeMatch?leetcodeMatch[0]:"", hackerrank:"", otherLinks:[],
+    summary,
+    skills,
+    experience:exp, education:edu, projects:projs, certifications:certs, achievements:[], additionalInfo:"",
   };
 }
 
@@ -158,6 +321,7 @@ exports.uploadResume=async(req,res,next)=>{
     parsed.skills.technical=[...new Set([...parsed.skills.technical,...nlpSkills])];
     parsed.skills.programmingLanguages=[...new Set([...parsed.skills.programmingLanguages,...nlpSkills])];
     console.log("\n[ResumeUpload] Extracted Skills:");console.log(parsed.skills.technical);
+    console.log(`[ResumeUpload] Structured: ${parsed.experience.length} experience, ${parsed.projects.length} projects, ${parsed.education.length} education entries`);
     let doc=null;
     if(req.user){
       doc=await Resume.create({
@@ -207,13 +371,10 @@ exports.updateResume=async(req,res,next)=>{
   try{
     const r=await Resume.findOne({_id:req.params.id,userId:req.user._id});
     if(!r)return res.status(404).json({error:"Resume not found."});
-    // FIX (requirement #1): recursive deep merge instead of shallow spread —
-    // preserves sibling nested fields (skills categories, etc.) that a partial
-    // save didn't include. API contract unchanged: still `req.body.parsedData`.
     if(req.body.parsedData)r.parsedData=deepMerge(r.parsedData.toObject(),req.body.parsedData);
     if(req.body.sectionOrder)r.sectionOrder=req.body.sectionOrder;
-    if(req.body.hiddenSections)r.hiddenSections=req.body.hiddenSections; // Part 9: show/hide persistence
-    if(req.body.template)r.template=req.body.template; // requirement #12: persisted template choice
+    if(req.body.hiddenSections)r.hiddenSections=req.body.hiddenSections;
+    if(req.body.template)r.template=req.body.template;
     await r.save();res.json({success:true,resume:r});
   }catch(err){next(err);}
 };
