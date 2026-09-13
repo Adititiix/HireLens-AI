@@ -732,52 +732,7 @@ Configure the Atlas network access rules and database user securely.
 
 ------------------------------------------------------------------------
 
-# Verification Checklist
-
-Before deployment:
-
-### Frontend
-
--   [ ] `npm run build` succeeds
--   [ ] Login page loads
--   [ ] Google Sign-In works
--   [ ] Dashboard loads
--   [ ] Resume upload works
--   [ ] JD upload works
--   [ ] Analysis results render
--   [ ] History loads
--   [ ] Historical analysis opens correctly
--   [ ] Editor works
--   [ ] Export/PDF works
-
-### Backend
-
--   [ ] `/api/health` returns `status: ok`
--   [ ] MongoDB connection succeeds
--   [ ] JWT authentication works
--   [ ] Google token verification works
--   [ ] Resume upload succeeds
--   [ ] JD upload succeeds
--   [ ] `/api/analysis/run` returns 200
--   [ ] `/api/analysis/history` returns 200
--   [ ] `/api/analysis/detail/:id` returns 200
-
-### Python
-
--   [ ] `/health` returns 200
--   [ ] `/extract` works
--   [ ] `/analyze` works
--   [ ] Sentence Transformer initializes
--   [ ] Node backend can reach Python service
-
-------------------------------------------------------------------------
-
 # Project Metrics
-
-## Metrics you can legitimately mention
-
-These are implementation/product metrics rather than unsupported
-accuracy claims:
 
 -   **4** semantic resume sections are scored with dedicated weights:
     Summary, Experience, Projects, and Skills.
@@ -807,55 +762,6 @@ Analysis request:        ~2.2 s
 
 These numbers are **sample local observations, not benchmark results**.
 They should not be presented as guaranteed production latency.
-
-------------------------------------------------------------------------
-
-# What NOT to Claim Without Benchmarking
-
-Avoid unsupported statements such as:
-
-``` text
-"95% accurate resume parser"
-"98% ATS prediction accuracy"
-"50% faster recruitment"
-"99.9% uptime"
-"Processes 10,000 resumes per minute"
-```
-
-Unless you have actually measured these values with a defined test
-methodology.
-
-For a student/portfolio project, implementation metrics are usually
-stronger and more credible than invented accuracy percentages.
-
-------------------------------------------------------------------------
-
-# Suggested Resume Project Description
-
-### Short version
-
-**HireLens AI --- AI-Powered Resume Analyzer & Job Matcher**\
-Built a full-stack resume analysis platform using React,
-Node.js/Express, MongoDB, and Python/FastAPI; implemented PDF/DOCX
-parsing, priority-weighted skill matching, ATS evaluation, and
-section-level semantic scoring using Sentence Transformers, with resume
-editing, analysis history, Google authentication, and PDF export.
-
-### Metric-focused version
-
-**HireLens AI --- Resume Analyzer & Job Matching Platform**\
-Developed a full-stack platform that combines **priority-weighted skill
-matching, 4-section semantic scoring, ATS analysis, and rule-based
-resume recommendations** using React, Node.js, MongoDB, FastAPI, and
-`all-MiniLM-L6-v2`; added JWT/Firebase authentication, analysis history,
-resume editing, and browser-based PDF export.
-
-### One-line version
-
-**HireLens AI:** Full-stack resume/JD matching platform with
-**priority-aware skill scoring, 4-section semantic analysis, ATS
-evaluation, rule-based recommendations, resume editing, history, Google
-authentication, and PDF export**.
 
 ------------------------------------------------------------------------
 
@@ -919,15 +825,6 @@ HireLens-AI/
 │
 └── README.md
 ```
-
-------------------------------------------------------------------------
-
-# License
-
-Add the license you intend to use for the repository. If this is
-primarily a portfolio/academic project and you do not want others
-reusing the code, do not add an open-source license without deciding on
-the terms first.
 
 ------------------------------------------------------------------------
 
