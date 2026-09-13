@@ -55,3 +55,25 @@
 ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 .dark ::-webkit-scrollbar-thumb { background: #374151; }
+
+/* TASK 4 FIX: shared print target for the real Export/Download flow.
+   #print-resume-root is always mounted (in EditorPage.jsx and
+   DashboardPage.jsx) but hidden on screen; @media print hides everything
+   ELSE and shows only this node at true 100% scale, so window.print() /
+   "Save as PDF" produces the CURRENT resume data exactly as structured by
+   ResumePreview — not the originally uploaded file, and not the on-screen
+   zoomed/scaled preview transform. */
+#print-resume-root { display: none; }
+
+@media print {
+  body * { visibility: hidden; }
+  #print-resume-root, #print-resume-root * { visibility: visible; }
+  #print-resume-root {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  @page { margin: 0; }
+}

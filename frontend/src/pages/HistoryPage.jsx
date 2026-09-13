@@ -1,5 +1,5 @@
 import React,{useState,useEffect}from"react";
-import{Link}from"react-router-dom";
+import{Link,useNavigate}from"react-router-dom";
 import{motion}from"framer-motion";
 import{Clock,Target,Bot,ArrowRight,TrendingUp,FileText}from"lucide-react";
 import{analysisAPI}from"../services/api";
@@ -55,11 +55,14 @@ function ComparePanel({a,b,onClose}){
 
 export default function HistoryPage(){
   const{user}=useAuth();
-  const{setCurrentAnalysis}=useAnalysis();
+  const{setCurrentAnalysis,setCurrentResume}=useAnalysis();
+  const navigate=useNavigate();
   const[analyses,setAnalyses]=useState([]);
   const[loading,setLoading]=useState(true);
   const[selected,setSelected]=useState([]);
   const[error,setError]=useState("");
+  const[viewingId,setViewingId]=useState(null);
+  const[viewError,setViewError]=useState("");
 
   useEffect(()=>{
     if(!user){setLoading(false);return;}
@@ -68,6 +71,33 @@ export default function HistoryPage(){
       .catch(e=>setError(e.userMessage||"Failed to load history"))
       .finally(()=>setLoading(false));
   },[user]);
+
+  // TASK 8 FIX: previously this only called setCurrentAnalysis(a) with the
+  // SUMMARY object from the list (missing improvements/atsExplanation/
+  // atsBreakdown) and never navigated anywhere — so the button appeared to
+  // do nothing. It now fetches the FULL, correct analysis by its own _id
+  // (GET /api/analysis/detail/:id — read-only, does NOT call
+  // POST /api/analysis/run, so no new analysis or history record is ever
+  // created) and navigates to the Results page to display it.
+  const handleView=async(analysisId)=>{
+    setViewingId(analysisId);
+    setViewError("");
+    try{
+      const res=await analysisAPI.getById(analysisId);
+      const full=res.data.analysis;
+      setCurrentAnalysis(full);
+      if(full.resume && typeof full.resume==="object"){
+        // resume was populated (fileName + parsedData) by the backend — makes
+        // "Edit My Resume" on the Results page load the correct resume too.
+        setCurrentResume(prev=>({ ...(prev||{}), _id: full.resume._id, parsedData: full.resume.parsedData, fileName: full.resume.fileName }));
+      }
+      navigate("/dashboard");
+    }catch(e){
+      setViewError(e.userMessage||"Failed to load this analysis.");
+    }finally{
+      setViewingId(null);
+    }
+  };
 
   const toggleSelect=(id)=>{
     setSelected(prev=>{
@@ -102,6 +132,7 @@ export default function HistoryPage(){
 
       {loading&&<div className="flex justify-center py-12"><Spinner size="lg"/></div>}
       {error&&<div className="card p-6 text-center text-red-600 dark:text-red-400">{error}</div>}
+      {viewError&&<div className="mb-4 text-sm text-red-600 dark:text-red-400 text-center">{viewError}</div>}
 
       {!loading&&analyses.length===0&&(
         <div className="card p-12 text-center">
@@ -142,8 +173,10 @@ export default function HistoryPage(){
                   </div>
                   <div className="flex items-center gap-2">
                     <ScoreBadge score={score}/>
-                    <button onClick={()=>{setCurrentAnalysis(a);}}
-                      className="btn-secondary text-xs py-1.5 px-3">View<ArrowRight className="w-3 h-3"/></button>
+                    <button onClick={()=>handleView(a._id)} disabled={viewingId===a._id}
+                      className="btn-secondary text-xs py-1.5 px-3 disabled:opacity-60">
+                      {viewingId===a._id?<Spinner size="sm"/>:<>View<ArrowRight className="w-3 h-3"/></>}
+                    </button>
                   </div>
                 </div>
               </div>

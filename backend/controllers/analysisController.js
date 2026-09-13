@@ -86,3 +86,20 @@ exports.listAnalyses=async(req,res)=>{
     res.json({success:true,analyses});
   }catch(err){res.status(500).json({error:"Failed to list analyses."});}
 };
+
+exports.getAnalysisById = async (req, res) => {
+  try {
+    const a = await Analysis.findOne({
+      _id: req.params.id,
+      user: req.user._id,
+    }).populate("resume", "fileName parsedData");
+
+    if (!a) {
+      return res.status(404).json({ error: "Analysis not found." });
+    }
+
+    res.json({ success: true, analysis: a });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch analysis." });
+  }
+};

@@ -1,11 +1,12 @@
 import React,{useState,useEffect,useCallback}from"react";
 import{motion,AnimatePresence}from"framer-motion";
-import{X,Eye,EyeOff,Save,Plus,Trash2,GripVertical,Upload,FileText,User,Briefcase,GraduationCap,Wrench,Code2,Award,Star,Info,ArrowRight,ChevronDown,Pencil,ZoomIn,ZoomOut,Maximize2}from"lucide-react";
+import{X,Eye,EyeOff,Save,Plus,Trash2,GripVertical,Upload,FileText,User,Briefcase,GraduationCap,Wrench,Code2,Award,Star,Info,ArrowRight,ChevronDown,Pencil,ZoomIn,ZoomOut,Maximize2,Download}from"lucide-react";
 import{useDropzone}from"react-dropzone";
 import{resumeAPI}from"../services/api";
 import{useAnalysis}from"../context/AnalysisContext";
 import{useAuth}from"../context/AuthContext";
 import{Spinner}from"../components/ui";
+import ResumePreview,{DEFAULT_SECTION_ORDER as SHARED_SECTION_ORDER}from"../components/editor/ResumePreview";
 
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2);
 
@@ -174,124 +175,6 @@ function ImportModal({onClose,onNew,onImportData}){
   );
 }
 
-/* ── Part 5: ATS-optimized default template — professional, minimal, black & white, no icons, single column ── */
-function ResumePreview({data,sectionOrder,hiddenSections=[]}){
-  if(!data)return null;
-  const allSkills=[...(data.skills?.technical||[]),...(data.skills?.tools||[]),...(data.skills?.cloud||[]),...(data.skills?.languages||[])];
-  const sections=(sectionOrder||DEFAULT_SECTION_ORDER).filter(s=>!hiddenSections.includes(s));
-  const contactLine=[data.email,data.phone,data.linkedin,data.github,data.portfolio,data.leetcode,data.hackerrank,
-    ...(data.otherLinks||[]).map(l=>l.url)].filter(Boolean).join("  |  ");
-
-  const heading=(label)=>(
-    <div style={{marginBottom:"6px"}}>
-      <div style={{fontSize:"11px",fontWeight:700,textTransform:"uppercase",letterSpacing:"1.2px",color:"#111"}}>{label}</div>
-      <div style={{height:"1px",background:"#111",marginTop:"2px"}}/>
-    </div>
-  );
-
-  return(
-    <div className="bg-white shadow-lg" style={{fontFamily:"Georgia,'Times New Roman',serif",fontSize:"11.5px",color:"#111",lineHeight:1.45,padding:"14mm 16mm",width:"210mm",minHeight:"297mm"}}>
-      {/* Header — NAME / ROLE / EMAIL | PHONE | LINKEDIN | GITHUB | PORTFOLIO — no icons, no color */}
-      {!hiddenSections.includes("header")&&(
-        <div style={{textAlign:"center",marginBottom:"14px"}}>
-          <h1 style={{fontSize:"20px",fontWeight:700,fontFamily:"Arial,Helvetica,sans-serif",letterSpacing:"0.5px",margin:0}}>{(data.name||"YOUR NAME").toUpperCase()}</h1>
-          {data.jobTitle&&<div style={{fontSize:"12px",fontWeight:500,marginTop:"2px",color:"#333"}}>{data.jobTitle}</div>}
-          {contactLine&&<div style={{fontSize:"10px",color:"#333",marginTop:"5px"}}>{contactLine}</div>}
-        </div>
-      )}
-
-      {sections.filter(s=>s!=="header").map(sec=>{
-        if(sec==="summary"&&data.summary)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Summary")}
-            <p style={{fontSize:"11.5px",color:"#222",marginTop:"4px"}}>{data.summary}</p>
-          </div>
-        );
-        if(sec==="skills"&&allSkills.length>0)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Skills")}
-            <p style={{fontSize:"11.5px",color:"#222",marginTop:"4px"}}>{allSkills.join("  •  ")}</p>
-          </div>
-        );
-        if(sec==="experience"&&data.experience?.length>0)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Experience")}
-            {data.experience.map((e,i)=>(
-              <div key={i} style={{marginTop:"8px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",fontWeight:700,fontFamily:"Arial,Helvetica,sans-serif",fontSize:"12px"}}>
-                  <span>{e.title}{e.company?` — ${e.company}`:""}</span>
-                  <span style={{fontWeight:400,fontSize:"10.5px",color:"#333"}}>{e.startDate}{e.endDate?` – ${e.endDate}`:""}</span>
-                </div>
-                {e.location&&<div style={{fontSize:"10.5px",color:"#555"}}>{e.location}</div>}
-                {e.bullets?.filter(Boolean).length>0&&(
-                  <ul style={{paddingLeft:"16px",margin:"3px 0 0"}}>
-                    {e.bullets.filter(Boolean).map((b,j)=><li key={j} style={{fontSize:"11px",color:"#222",marginBottom:"2px"}}>{b}</li>)}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
-        );
-        if(sec==="projects"&&data.projects?.length>0)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Projects")}
-            {data.projects.map((p,i)=>(
-              <div key={i} style={{marginTop:"8px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",fontWeight:700,fontFamily:"Arial,Helvetica,sans-serif",fontSize:"12px"}}>
-                  <span>{p.name}</span>
-                  {p.technologies?.length>0&&<span style={{fontWeight:400,fontSize:"10.5px",color:"#333"}}>{p.technologies.join(", ")}</span>}
-                </div>
-                {p.description&&<p style={{fontSize:"11px",color:"#222",marginTop:"2px"}}>{p.description}</p>}
-              </div>
-            ))}
-          </div>
-        );
-        if(sec==="certifications"&&data.certifications?.length>0)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Certifications")}
-            {data.certifications.map((c,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",marginTop:"4px",fontSize:"11px"}}>
-                <span><strong style={{fontFamily:"Arial,Helvetica,sans-serif"}}>{c.name}</strong>{c.provider?` — ${c.provider}`:""}</span>
-                <span style={{color:"#333"}}>{c.issueDate}</span>
-              </div>
-            ))}
-          </div>
-        );
-        if(sec==="education"&&data.education?.length>0)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Education")}
-            {data.education.map((e,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",marginTop:"4px",fontSize:"11px"}}>
-                <span><strong style={{fontFamily:"Arial,Helvetica,sans-serif"}}>{e.degree}</strong>{e.institution?` — ${e.institution}`:""}{e.gpa?` (GPA: ${e.gpa})`:""}</span>
-                <span style={{color:"#333"}}>{e.endDate}</span>
-              </div>
-            ))}
-          </div>
-        );
-        if(sec==="achievements"&&data.achievements?.length>0)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Achievements")}
-            {data.achievements.map((a,i)=>(
-              <div key={i} style={{marginTop:"4px",fontSize:"11px"}}>
-                <strong style={{fontFamily:"Arial,Helvetica,sans-serif"}}>{a.title}</strong>
-                {a.description&&<span style={{color:"#222"}}> — {a.description}</span>}
-              </div>
-            ))}
-          </div>
-        );
-        if(sec==="additionalInfo"&&data.additionalInfo)return(
-          <div key={sec} style={{marginBottom:"12px"}}>
-            {heading("Additional Information")}
-            <p style={{fontSize:"11px",color:"#222",marginTop:"4px"}}>{data.additionalInfo}</p>
-          </div>
-        );
-        return null;
-      })}
-    </div>
-  );
-}
-
-/* ── Part 3/4: compact "card" row for list-type entries, with Edit/Delete ── */
 function EntryRow({title,subtitle,onEdit,onDelete,editing,children}){
   if(editing){
     return(
@@ -647,6 +530,9 @@ export default function EditorPage(){
             <span className="text-xs text-gray-400 w-10 text-center tabular-nums">{Math.round(zoom*100)}%</span>
             <button onClick={()=>setZoom(z=>Math.min(1.2,+(z+0.08).toFixed(2)))} className="btn-ghost p-1.5 rounded-lg" title="Zoom in"><ZoomIn className="w-3.5 h-3.5"/></button>
             <button onClick={()=>setFullPreview(true)} className="btn-ghost p-1.5 rounded-lg" title="Fullscreen preview"><Maximize2 className="w-3.5 h-3.5"/></button>
+            <button onClick={()=>window.print()} className="btn-primary text-xs py-1.5 px-3 ml-1" title="Export as PDF">
+              <Download className="w-3.5 h-3.5"/>Export
+            </button>
           </div>
         </div>
         <div className="flex-1 overflow-auto flex justify-center py-8">
@@ -654,6 +540,14 @@ export default function EditorPage(){
             <ResumePreview data={data} sectionOrder={sectionOrder} hiddenSections={hiddenSections}/>
           </div>
         </div>
+      </div>
+
+      {/* TASK 4 FIX: hidden print target — always mounted with the CURRENT (possibly
+          edited) resume data. index.css's @media print rules hide everything else
+          and show only this node at true 100% scale, so Export always downloads
+          what's on screen right now, edits included — never the original upload. */}
+      <div id="print-resume-root">
+        <ResumePreview data={data} sectionOrder={sectionOrder} hiddenSections={hiddenSections}/>
       </div>
 
       {/* Mobile-only preview trigger (right panel hidden below lg breakpoint) */}

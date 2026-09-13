@@ -1,9 +1,10 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Edit3, Download, Target, Bot, Check, X, ArrowRight, AlertTriangle, Lightbulb, TrendingUp } from "lucide-react";
+import { Download, Target, Bot, Check, X, ArrowRight, AlertTriangle, Lightbulb, TrendingUp } from "lucide-react";
 import { useAnalysis } from "../context/AnalysisContext";
 import { ScoreCard, CollapsibleSection, ProgressBar } from "../components/ui";
+import ResumePreview from "../components/editor/ResumePreview";
 
 /* ── ATSExplanationPanel ── */
 function ATSExplanationPanel({ explanation, scores={}, skillGap={} }) {
@@ -235,7 +236,7 @@ function ATSBreakdown({ scores={}, atsBreakdown={} }) {
 
 /* ── Main Dashboard ── */
 export default function DashboardPage() {
-  const { currentAnalysis } = useAnalysis();
+  const { currentAnalysis, currentResume } = useAnalysis();
   if(!currentAnalysis) return (
     <main className="max-w-3xl mx-auto px-4 py-16 text-center">
       <div className="card p-12">
@@ -247,47 +248,83 @@ export default function DashboardPage() {
   );
 
   const{scores={},skillGap={},improvements=[],atsBreakdown={},jobDescription={},atsExplanation=""}=currentAnalysis;
+  const resumeData = currentResume?.parsedData || null;
 
   return (
-    <main className="max-w-3xl mx-auto px-4 py-8">
+    <main className="max-w-6xl mx-auto px-4 py-8">
       <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="page-header">Analysis Results</h1>
           <p className="page-sub">{jobDescription.title||"Target Position"} · Just now</p>
         </div>
-        <div className="flex gap-2">
-          <Link to="/editor" className="btn-secondary text-sm py-2 px-4"><Edit3 className="w-3.5 h-3.5"/>Edit Resume</Link>
-          <button className="btn-primary text-sm py-2 px-4"><Download className="w-3.5 h-3.5"/>Export</button>
-        </div>
+        {/* TASK 4 FIX: root cause was a missing onClick — this button previously did
+            nothing at all. Now triggers a real browser print/save-as-PDF of the
+            CURRENT resume data (shared ResumePreview + #print-resume-root, same
+            mechanism as the Editor's Export button — one implementation, reused). */}
+        <button onClick={()=>window.print()} disabled={!resumeData}
+          className="btn-primary text-sm py-2 px-4 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={resumeData?"Export current resume as PDF":"Open the editor first to load resume data"}>
+          <Download className="w-3.5 h-3.5"/>Export
+        </button>
       </motion.div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-        <ScoreCard label="Match Score"  score={scores.overall||0}    description={`${skillGap.highMissing?.length||0} high-priority gaps`} icon={Target} delay={0}/>
-        <ScoreCard label="ATS Score"    score={scores.ats||0}        description="ATS compatibility" icon={Bot} delay={0.05}/>
-        <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{delay:0.1}} className="card p-5">
-          <p className="section-label mb-2">Matched</p>
-          <p className="text-3xl font-bold tabular-nums text-green-600 dark:text-green-400">{skillGap.matched?.length||0}</p>
-          <p className="text-xs text-gray-400 mt-1">skills aligned</p>
-        </motion.div>
-        <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{delay:0.15}} className="card p-5">
-          <p className="section-label mb-2">Missing</p>
-          <p className="text-3xl font-bold tabular-nums text-red-600 dark:text-red-400">{skillGap.missing?.length||0}</p>
-          <p className="text-xs text-gray-400 mt-1">total gaps</p>
-        </motion.div>
+      {/* TASK 6: ONE large rectangular main Results container, exactly three areas via CSS Grid.
+          Desktop: grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+          LEFT spans both rows (grid-row: 1 / 3) and is visually dominant. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 lg:grid-rows-2 gap-4 lg:auto-rows-fr">
+        {/* LEFT — "WHAT IS MY RESULT?" — spans both rows on desktop */}
+        <div className="lg:row-span-2 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <ScoreCard label="Match Score"  score={scores.overall||0}    description={`${skillGap.highMissing?.length||0} high-priority gaps`} icon={Target} delay={0}/>
+            <ScoreCard label="ATS Score"    score={scores.ats||0}        description="ATS compatibility" icon={Bot} delay={0.05}/>
+            <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{delay:0.1}} className="card p-5">
+              <p className="section-label mb-2">Matched</p>
+              <p className="text-3xl font-bold tabular-nums text-green-600 dark:text-green-400">{skillGap.matched?.length||0}</p>
+              <p className="text-xs text-gray-400 mt-1">skills aligned</p>
+            </motion.div>
+            <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{delay:0.15}} className="card p-5">
+              <p className="section-label mb-2">Missing</p>
+              <p className="text-3xl font-bold tabular-nums text-red-600 dark:text-red-400">{skillGap.missing?.length||0}</p>
+              <p className="text-xs text-gray-400 mt-1">total gaps</p>
+            </motion.div>
+          </div>
+          {atsExplanation&&<ATSExplanationPanel explanation={atsExplanation} scores={scores} skillGap={skillGap}/>}
+          <SkillGapPanel skillGap={skillGap}/>
+        </div>
+
+        {/* RIGHT TOP — "WHY DID I GET THIS SCORE?" */}
+        <div className="lg:col-start-2 lg:row-start-1">
+          <ATSBreakdown scores={scores} atsBreakdown={atsBreakdown}/>
+        </div>
+
+        {/* RIGHT BOTTOM — "HOW CAN I IMPROVE?" */}
+        <div className="lg:col-start-2 lg:row-start-2 overflow-y-auto lg:max-h-[600px]">
+          <ImprovementsPanel improvements={improvements}/>
+        </div>
       </div>
 
-      <div className="space-y-4">
-        {atsExplanation&&<ATSExplanationPanel explanation={atsExplanation} scores={scores} skillGap={skillGap}/>}
-        <SkillGapPanel skillGap={skillGap}/>
-        <ImprovementsPanel improvements={improvements}/>
-        <ATSBreakdown scores={scores} atsBreakdown={atsBreakdown}/>
+      {/* TASK 7: single "Edit My Resume" button, centered, below the whole 3-panel
+          rectangle. The previous small "Edit Resume" link in the header row above
+          has been removed rather than duplicated — this is the one and only
+          Edit entry point on the Results page now. Navigating to /editor loads
+          the CURRENT resume via AnalysisContext's existing currentResume state —
+          EditorPage.jsx already reads that on mount, so this never creates a
+          blank resume. */}
+      <div className="flex justify-center mt-8">
+        <Link to="/editor" className="btn-primary text-base px-8 py-3">
+          Edit My Resume<ArrowRight className="w-4 h-4"/>
+        </Link>
       </div>
 
-      <div className="card p-6 mt-5 text-center">
-        <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-2">Ready to update your resume?</h3>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Open the editor to apply AI suggestions and export.</p>
-        <Link to="/editor" className="btn-primary inline-flex mx-auto">Open Resume Editor<ArrowRight className="w-4 h-4"/></Link>
-      </div>
+      {/* Hidden print target for the Export button above — same shared
+          mechanism as EditorPage.jsx's Export. If no resume data has been
+          loaded into context yet, nothing renders and the disabled Export
+          button prevents an empty/blank download. */}
+      {resumeData && (
+        <div id="print-resume-root">
+          <ResumePreview data={resumeData} sectionOrder={currentResume?.sectionOrder} hiddenSections={currentResume?.hiddenSections||[]}/>
+        </div>
+      )}
     </main>
   );
 }
