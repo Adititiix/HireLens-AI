@@ -29,21 +29,39 @@ import re
 import random
 from typing import Dict, List, Optional
 
+from matching.skill_matcher import SkillMatcher
+
+# Keyword-only skill extraction (no model needed) for grounding the summary in the resume's own skills.
+_SKILLS = SkillMatcher(embedder=None)
+
+# Each replacement keeps the original meaning: a stronger verb must not claim more than the bullet says
+# (no "Led"/"Drove"/"Oversaw" for "was responsible for", no "Architected" for "made", no "Eliminated" for "fixed").
 ACTION_VERB_REPLACEMENTS: Dict[str, List[str]] = {
-    "worked on":          ["Developed", "Built", "Engineered", "Implemented"],
-    "helped with":        ["Contributed to", "Co-developed", "Supported delivery of"],
-    "was responsible for":["Owned", "Led", "Managed", "Drove"],
-    "made":               ["Developed", "Engineered", "Architected", "Built"],
-    "did":                ["Executed", "Implemented", "Delivered"],
-    "used":               ["Leveraged", "Utilized", "Implemented with"],
-    "fixed":              ["Resolved", "Debugged and patched", "Eliminated"],
-    "updated":            ["Revamped", "Modernized", "Upgraded"],
-    "created":            ["Architected", "Engineered", "Designed and built"],
-    "wrote":              ["Authored", "Developed", "Implemented"],
-    "tested":             ["Validated", "Tested and verified", "Ensured quality of"],
-    "worked with":        ["Collaborated on", "Leveraged", "Integrated"],
-    "handled":            ["Managed", "Owned", "Oversaw"],
+    "worked on":          ["Developed", "Built", "Implemented"],
+    "helped with":        ["Contributed to", "Assisted with"],
+    "was responsible for":["Handled", "Maintained"],
+    "made":               ["Developed", "Built"],
+    "did":                ["Carried out", "Completed"],
+    "used":               ["Applied", "Utilized"],
+    "fixed":              ["Resolved", "Corrected"],
+    "updated":            ["Revised", "Upgraded"],
+    "created":            ["Built", "Developed"],
+    "wrote":              ["Authored", "Developed"],
+    "tested":             ["Validated", "Tested and verified"],
+    "worked with":        ["Collaborated with", "Worked alongside"],
+    "handled":            ["Managed", "Processed"],
 }
+
+# "3+ years", "5 yrs", "two years of experience" — a duration claim is only acceptable when the resume itself states it.
+_NUM_WORDS = r"(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|several|many|multiple)"
+_DURATION_RE = re.compile(r"\b" + _NUM_WORDS + r"\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
+
+
+def unsupported_duration_claims(text: str, resume_text: str) -> List[str]:
+    """Experience-duration phrases in `text` that the resume does not literally contain."""
+    resume_low = re.sub(r"\s+", " ", (resume_text or "").lower())
+    return [m.group(0) for m in _DURATION_RE.finditer(text or "")
+            if re.sub(r"\s+", " ", m.group(0).lower()) not in resume_low]
 
 WEAK_VERB_PATTERNS: List[str] = list(ACTION_VERB_REPLACEMENTS.keys())
 
@@ -103,15 +121,17 @@ class SuggestionEngine:
 
         # Missing skills addition tip
         if missing_skills:
+            # A job requirement is not evidence that the candidate has the skill: the tip asks, it does not assert.
             suggestions.append({
                 "type":    "add_skills",
                 "section": "Skills",
                 "original": "",
                 "suggested": (
-                    f"Add these in-demand skills to your profile: "
-                    f"{', '.join(missing_skills[:6])}"
+                    f"The job asks for skills your resume doesn't mention: {', '.join(missing_skills[:6])}. "
+                    "Add one only if you have actually used it."
                 ),
-                "reason": "These skills appear in the JD but not in your resume.",
+                "skills":  list(missing_skills[:6]),
+                "reason": "These skills appear in the job description but not in your resume.",
             })
 
         # FIX (Part 1, defensive final pass): never let a suggestion through
@@ -121,6 +141,8 @@ class SuggestionEngine:
             s for s in suggestions
             if s.get("section", "").strip().lower() not in CONTACT_SECTION_KEYWORDS
             and not self._looks_like_contact_line(s.get("original", ""))
+            # never suggest an experience duration the resume doesn't state ("3+ years of experience")
+            and not unsupported_duration_claims(s.get("suggested", ""), resume_text)
         ]
 
         return suggestions[:8]
@@ -134,12 +156,13 @@ class SuggestionEngine:
     ) -> str:
         """Improve a specific section (single-section endpoint)."""
         if section.lower() in ["summary", "professional summary", "objective"]:
+            # Insufficient verified evidence → keep the candidate's own text unchanged.
             if self.embedder:
                 sim = self.embedder.cosine_similarity(content, jd_text)
                 if sim < 0.6:
-                    return self._suggest_summary_text(content, jd_text, missing_skills)
+                    return self._suggest_summary_text(content, jd_text, missing_skills) or content
             else:
-                return self._suggest_summary_text(content, jd_text, missing_skills)
+                return self._suggest_summary_text(content, jd_text, missing_skills) or content
 
         bullets = self._extract_bullets(content)
         rewritten = []
@@ -231,12 +254,15 @@ class SuggestionEngine:
 
         if low_alignment:
             improved = self._suggest_summary_text(resume_text, jd_text, missing_skills)
+            if not improved:
+                return None   # not enough verified evidence in the resume for a grounded summary
             return {
                 "type":    "summary_rewrite",
                 "section": "Professional Summary",
                 "original": self._extract_summary(resume_text),
                 "suggested": improved,
-                "reason":  "Your summary has low keyword alignment with the JD. Adding role-specific terms improves ATS ranking.",
+                "reason":  ("Your summary has low alignment with the job description. This version uses only skills and "
+                            "experience already in your resume; add a job requirement only if you genuinely have it."),
             }
         return None
 
@@ -246,19 +272,47 @@ class SuggestionEngine:
         jd_text: str,
         missing_skills: List[str],
     ) -> str:
-        role_match = re.search(
-            r"(Senior|Lead|Junior|Principal|Staff)?\s*[\w\s]+ "
-            r"(Engineer|Developer|Architect|Analyst|Manager|Scientist)",
-            jd_text,
-        )
-        role       = role_match.group(0).strip() if role_match else "Software Engineer"
-        skills_str = ", ".join(missing_skills[:3]) if missing_skills else "React, Node.js, AWS"
-        return (
-            f"Results-driven {role} with 3+ years of experience building scalable, "
-            f"high-performance applications. Passionate about clean architecture and "
-            f"delivering measurable business impact. Expanding expertise in {skills_str} "
-            f"to align with modern industry demands."
-        )
+        """
+        FIX (grounded summary): built ONLY from facts in this candidate's resume text —
+        the skills the existing SkillMatcher finds in it (shown as the candidate wrote
+        them) and which kinds of experience sections it contains. The previous template
+        invented "3+ years of experience", a role taken from the job description,
+        technologies the resume lacked (default "React, Node.js, AWS" or the JD's
+        missing skills) and impact claims. `jd_text` and `missing_skills` are kept for
+        call-site compatibility but are never used as content: a job description is
+        not evidence of what the candidate has done.
+
+        Returns "" when the resume gives too little verified evidence for a summary.
+        """
+        # Contact/header lines are not evidence of skills (e.g. "github.com/…" is a profile link, not a skill).
+        text = "\n".join(l for l in (resume_text or "").split("\n") if not self._looks_like_contact_line(l.strip()))
+        low = text.lower()
+        skills = []
+        for skill in _SKILLS.extract_skills(text):
+            m = re.search(r"(?<![A-Za-z0-9])" + re.escape(skill) + r"(?![A-Za-z0-9])", text, re.IGNORECASE)
+            if m:   # aliases the candidate didn't literally write (e.g. "k8s" → "kubernetes") are skipped
+                skills.append((m.start(), m.group(0)))
+        skills = [s for _, s in sorted(skills)][:5]
+
+        contexts = []
+        if re.search(r"^\s*(academic |personal |key |technical )?projects?\b", text, re.IGNORECASE | re.MULTILINE):
+            contexts.append("projects")
+        has_internship = bool(re.search(r"\binterns?(hip)?s?\b", low))
+        if has_internship:
+            contexts.append("internship work")
+        # An "Experience" heading may hold only that internship — don't present it as separate employment.
+        elif re.search(r"^\s*(work |professional |relevant )?experience\b|^\s*employment\b", text, re.IGNORECASE | re.MULTILINE):
+            contexts.append("work experience")
+
+        def join(items):
+            return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+        parts = []
+        if contexts:
+            parts.append(f"Experience includes {join(contexts)}.")
+        if skills:
+            parts.append(f"Skills include {join(skills)}.")
+        return " ".join(parts)
 
     def _extract_summary(self, text: str) -> str:
         lines = text.split("\n")

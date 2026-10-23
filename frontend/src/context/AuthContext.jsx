@@ -23,7 +23,13 @@ export function AuthProvider({children}){
     api.defaults.headers.common["Authorization"]=`Bearer ${r.data.token}`;
     setUser(r.data.user);return r.data;
   };
+  // Google sign-in: the backend already verified the Firebase token and issued our own JWT.
+  const loginWithToken=(token,user)=>{
+    localStorage.setItem("riq_token",token);
+    api.defaults.headers.common["Authorization"]=`Bearer ${token}`;
+    setUser(user);
+  };
   const logout=()=>{localStorage.removeItem("riq_token");delete api.defaults.headers.common["Authorization"];setUser(null);};
-  return<AuthContext.Provider value={{user,loading,login,register,logout}}>{children}</AuthContext.Provider>;
+  return<AuthContext.Provider value={{user,loading,login,register,loginWithToken,logout}}>{children}</AuthContext.Provider>;
 }
 export const useAuth=()=>{const c=useContext(AuthContext);if(!c)throw new Error("useAuth outside AuthProvider");return c;};

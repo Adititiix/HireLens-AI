@@ -57,6 +57,25 @@
 - No mock data anywhere in the codebase
 - All routes scoped to authenticated user
 
+## AI Resume Suggestions (evidence-grounded)
+
+The editor's **AI Suggestions** card finds specific weaknesses in the resume being edited — responsibility-style
+bullets, weak or repeated openers, technology lists without purpose, missing outcomes, overly long or vague
+bullets, job skills that are missing or never demonstrated — and suggests fixes grounded in the candidate's own
+resume. It is a **rule-based detector plus lightweight retrieval** (reusing the existing all-MiniLM-L6-v2
+embeddings and skill matcher), **not a generative LLM**: it never invents numbers, tools or achievements; when
+facts are missing it asks a question instead. Nothing is applied until the user accepts it, one line at a time.
+
+- Endpoint: `POST /api/resume/suggestions` → NLP `POST /resume-suggestions`
+- Code: `python-nlp/recommendations/evidence/`, `frontend/src/components/editor/SuggestionsPanel.jsx`
+- Full documentation (rules, retrieval, validation, confidence, API examples, limitations):
+  [`docs/AI_SUGGESTIONS.md`](docs/AI_SUGGESTIONS.md)
+- Tests: `python-nlp` → `venv\Scripts\python -m unittest discover -s tests -t .`; `backend` / `frontend` → `npm test`
+
+Note: the summary suggestion returned by `/analyze` (`recommendations/suggestion_engine.py`) is now built only
+from the resume's own skills and sections; it no longer invents years of experience, a job-description role or
+technologies, and is omitted when the resume gives too little evidence.
+
 ## Quick Start
 
 ```bash

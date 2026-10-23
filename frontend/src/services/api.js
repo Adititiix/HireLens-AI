@@ -30,3 +30,7 @@ export const jdAPI = {
   upload:(file)=>{const f=new FormData();f.append("file",file);return api.post("/jd/upload",f,{headers:{"Content-Type":"multipart/form-data"}});},
   parse:(text)=>api.post("/jd/parse",{text}),
 };
+export const suggestionsAPI = {
+  // AI Resume Suggestions (rule-based + evidence retrieval) — see python-nlp/recommendations/evidence/
+  generate:(payload)=>api.post("/resume/suggestions",payload),
+};

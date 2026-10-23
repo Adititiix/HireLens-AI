@@ -10,6 +10,8 @@ from scoring.score_engine import ScoreEngine
 from ats.ats_analyzer import ATSAnalyzer
 from recommendations.suggestion_engine import SuggestionEngine
 from parsers.embedder import Embedder
+from recommendations.evidence import EvidenceSuggestionEngine
+from recommendations.evidence.api import create_router as create_suggestions_router
 
 app = FastAPI(title="ResumeIQ NLP Service", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -20,6 +22,9 @@ matcher           = SkillMatcher(embedder=embedder)
 scorer            = ScoreEngine(embedder=embedder)
 ats_analyzer      = ATSAnalyzer()
 suggestion_engine = SuggestionEngine(embedder=embedder)
+# Evidence-grounded suggestions (rule-based + retrieval) — reuses the same embedder/matcher/analyzer instances.
+evidence_engine   = EvidenceSuggestionEngine(embedder=embedder, skill_matcher=matcher, ats_analyzer=ats_analyzer)
+app.include_router(create_suggestions_router(lambda: evidence_engine))
 print("[startup] ✅ All components ready.\n")
 
 class AnalyzeRequest(BaseModel):

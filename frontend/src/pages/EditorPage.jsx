@@ -1,12 +1,18 @@
-import React,{useState,useEffect,useCallback}from"react";
+import React,{useState,useEffect,useCallback,useRef,useReducer,useMemo}from"react";
 import{motion,AnimatePresence}from"framer-motion";
-import{X,Eye,EyeOff,Save,Plus,Trash2,GripVertical,Upload,FileText,User,Briefcase,GraduationCap,Wrench,Code2,Award,Star,Info,ArrowRight,ChevronDown,Pencil,ZoomIn,ZoomOut,Maximize2,Download}from"lucide-react";
+import{X,Eye,EyeOff,Save,Plus,Trash2,GripVertical,Upload,FileText,User,Briefcase,GraduationCap,Wrench,Code2,Award,Star,Info,ArrowRight,ChevronDown,Pencil,ZoomIn,ZoomOut,Maximize2,Download,LayoutList,ExternalLink}from"lucide-react";
 import{useDropzone}from"react-dropzone";
 import{resumeAPI}from"../services/api";
 import{useAnalysis}from"../context/AnalysisContext";
 import{useAuth}from"../context/AuthContext";
 import{Spinner}from"../components/ui";
-import ResumePreview,{DEFAULT_SECTION_ORDER as SHARED_SECTION_ORDER}from"../components/editor/ResumePreview";
+import ResumePreview,{DEFAULT_SECTION_ORDER as SHARED_SECTION_ORDER,CUSTOM_SECTION_PREFIX}from"../components/editor/ResumePreview";
+import RichTextEditor from"../components/editor/RichTextEditor";
+import SuggestionsPanel from"../components/editor/SuggestionsPanel";
+import AnalysisTip from"../components/editor/AnalysisTip";
+import{safeHref}from"../utils/links";
+import{SKILL_CATEGORIES,OTHER_CATEGORY,categorizeSkill,categorizeSkills,collectTechnicalSkills,hasSkill,removeSkill}from"../utils/skillCategories";
+import{commitResumeChange,initialSuggestionsState,splitImprovements,suggestionsReducer,unsupportedDurationClaims}from"../utils/suggestions";
 
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2);
 
@@ -17,6 +23,7 @@ const DEFAULT={
   summary:"",
   skills:{technical:[],tools:[],cloud:[],soft:[],languages:[]},
   experience:[],education:[],projects:[],certifications:[],achievements:[],additionalInfo:"",
+  customSections:[], // user-added sections: {id,title,content(rich HTML)} — referenced in sectionOrder as "custom:<id>"
 };
 
 const DEFAULT_SECTION_ORDER=["header","summary","skills","experience","projects","certifications","education","achievements","additionalInfo"];
@@ -29,6 +36,28 @@ const SECTION_META={
   achievements:{label:"Achievements",icon:Star},additionalInfo:{label:"Additional Info",icon:Info},
 };
 
+// Blank entry for each list-type section (used by the "Add …" buttons and the Add Section menu).
+const ENTRY_TEMPLATES={
+  experience:{title:"",company:"",location:"",startDate:"",endDate:"",current:false,bullets:[""]},
+  education:{degree:"",institution:"",location:"",startDate:"",endDate:"",gpa:"",honors:""},
+  projects:{name:"",date:"",description:"",technologies:[],githubUrl:"",liveDemoUrl:"",additionalUrl:""},
+  certifications:{name:"",provider:"",issueDate:"",credentialId:"",credentialUrl:""},
+  achievements:{title:"",description:"",date:""},
+};
+
+// Built-in section types offered by "+ Add Section" (header is always present).
+const ADDABLE_SECTIONS=["experience","projects","education","skills","certifications","achievements","summary","additionalInfo"];
+const CUSTOM_TITLE_SUGGESTIONS=["Publications","Volunteer Experience","Leadership","Languages","Interests","Extracurricular Activities","Awards"];
+
+const isCustomId=id=>id.startsWith(CUSTOM_SECTION_PREFIX);
+
+// Keeps sectionOrder consistent with data.customSections: drops ids of custom
+// sections that no longer exist and appends any custom section not yet ordered.
+function normalizeSectionOrder(order,customSections=[]){
+  const customIds=customSections.map(c=>CUSTOM_SECTION_PREFIX+c.id);
+  return[...order.filter(id=>!isCustomId(id)||customIds.includes(id)),...customIds.filter(id=>!order.includes(id))];
+}
+
 /* ── Field primitives (unchanged) ── */
 function Field({label,value,onChange,type="text",placeholder="",hint,className=""}){
   return(
@@ -36,6 +65,24 @@ function Field({label,value,onChange,type="text",placeholder="",hint,className="
       <label className="section-label">{label}</label>
       <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className="form-input"/>
       {hint&&<p className="text-xs text-gray-400">{hint}</p>}
+    </div>
+  );
+}
+// A link field: same input, plus an "open" button when the value is a safe http(s)/mailto link.
+function UrlField({label,value,onChange,placeholder="",className=""}){
+  const href=safeHref(value);
+  return(
+    <div className={`space-y-1 ${className}`}>
+      <label className="section-label">{label}</label>
+      <div className="relative">
+        <input type="text" value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`form-input ${href?"pr-9":""}`}/>
+        {href&&(
+          <a href={href} target="_blank" rel="noopener noreferrer" title={`Open ${href}`}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-brand-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+            <ExternalLink className="w-3.5 h-3.5"/>
+          </a>
+        )}
+      </div>
     </div>
   );
 }
@@ -93,22 +140,6 @@ function ChipInput({label,values=[],onChange,placeholder,hint}){
       </div>
       {hint&&<p className="text-xs text-gray-400">{hint}</p>}
     </div>
-  );
-}
-
-function AITip({text,onApply}){
-  const[d,setD]=useState(false);const[a,setA]=useState(false);
-  if(d)return null;
-  return(
-    <motion.div initial={{opacity:0,y:-4}} animate={{opacity:1,y:0}} className="flex items-start gap-2.5 p-3 bg-brand-50 dark:bg-brand-900/20 border border-brand-100 dark:border-brand-800 rounded-xl mb-3">
-      <span className="text-base flex-shrink-0 mt-0.5">✨</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs text-brand-700 dark:text-brand-300 leading-relaxed">{text}</p>
-        {onApply&&!a&&<button onClick={()=>{onApply();setA(true);}} className="text-xs text-brand-600 font-semibold mt-1.5 hover:underline">Apply suggestion →</button>}
-        {a&&<span className="text-xs text-green-600 dark:text-green-400 font-medium mt-1.5 block">✓ Applied</span>}
-      </div>
-      <button onClick={()=>setD(true)} className="text-brand-300 hover:text-brand-500 text-xs">✕</button>
-    </motion.div>
   );
 }
 
@@ -202,7 +233,7 @@ function EntryRow({title,subtitle,onEdit,onDelete,editing,children}){
 function AccordionSection({id,meta,open,onToggle,hidden,onToggleVisibility,badge,draggableProps,children}){
   const Icon=meta.icon;
   return(
-    <div {...draggableProps} className={`card overflow-hidden mb-3 ${hidden?"opacity-50":""}`}>
+    <div id={`editor-section-${id}`} {...draggableProps} className={`card overflow-hidden mb-3 ${hidden?"opacity-50":""}`}>
       <div className="w-full flex items-center gap-2.5 px-4 py-3.5 cursor-grab active:cursor-grabbing">
         <GripVertical className="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 flex-shrink-0"/>
         <button onClick={onToggle} className="flex items-center gap-2.5 flex-1 min-w-0 text-left">
@@ -232,9 +263,126 @@ function AccordionSection({id,meta,open,onToggle,hidden,onToggleVisibility,badge
   );
 }
 
+/* ── Skills editor — one input; chips are grouped automatically by category (utils/skillCategories) ── */
+const CATEGORY_LABELS=Object.fromEntries([...SKILL_CATEGORIES.map(c=>[c.id,c.label]),[OTHER_CATEGORY,"Other Skills"]]);
+function SkillsEditor({skills,onChange}){
+  const[input,setInput]=useState("");
+  const all=collectTechnicalSkills(skills);
+  const groups=categorizeSkills(all);
+  const commit=(raw)=>{
+    const added=[];
+    for(const v of raw.split(",").map(x=>x.trim()).filter(Boolean)){
+      if(!hasSkill([...all,...added],v))added.push(v); // case-insensitive, alias-aware duplicate check
+    }
+    if(added.length)onChange({...skills,technical:[...(skills?.technical||[]),...added]});
+    setInput("");
+  };
+  const pending=input.trim();
+  return(
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="section-label">Add Skills</label>
+        <div className="flex gap-2">
+          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();commit(input);}}}
+            placeholder="Type a skill and press Enter (e.g. Python, Docker)" className="form-input flex-1"/>
+          <button type="button" onClick={()=>commit(input)} disabled={!pending} className="btn-secondary text-xs py-2 px-3 flex-shrink-0"><Plus className="w-3.5 h-3.5"/>Add</button>
+        </div>
+        <p className="text-xs text-gray-400">
+          {pending&&!pending.includes(",")
+            ?<>Will be grouped under <span className="font-semibold text-brand-500">{CATEGORY_LABELS[categorizeSkill(pending)]}</span></>
+            :"Skills are grouped automatically. Separate several with commas."}
+        </p>
+      </div>
+      {groups.length===0&&<p className="text-xs text-gray-400">No skills added yet.</p>}
+      {groups.map(g=>(
+        <div key={g.id} className="space-y-1.5">
+          <p className="section-label">{g.label} <span className="text-gray-300 dark:text-gray-600">· {g.skills.length}</span></p>
+          <div className="flex flex-wrap gap-1.5">
+            {g.skills.map(sk=>(
+              <span key={sk} className="inline-flex items-center gap-1 bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-400 text-xs font-medium pl-2 pr-1 py-1 rounded-md">
+                {sk}
+                <button type="button" onClick={()=>onChange(removeSkill(skills,sk))} className="hover:bg-brand-100 dark:hover:bg-brand-800 rounded p-0.5" title={`Remove ${sk}`}><X className="w-3 h-3"/></button>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── "+ Add Section" — re-add / add-entry for built-in sections, or create a titled custom section ── */
+function AddSectionMenu({sectionOrder,onAddBuiltIn,onAddCustom}){
+  const[open,setOpen]=useState(false);
+  const[customMode,setCustomMode]=useState(false);
+  const[title,setTitle]=useState("");
+  const close=()=>{setOpen(false);setCustomMode(false);setTitle("");};
+  const createCustom=()=>{const t=title.trim();if(!t)return;onAddCustom(t);close();};
+
+  if(!open)return(
+    <button onClick={()=>setOpen(true)} className="w-full flex items-center justify-center gap-2 py-3 mb-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-500 dark:text-gray-400 hover:text-brand-500 hover:border-brand-300 hover:bg-brand-50/30 dark:hover:border-brand-700 dark:hover:bg-brand-900/10 transition-all">
+      <Plus className="w-4 h-4"/>Add Section
+    </button>
+  );
+  return(
+    <motion.div initial={{opacity:0,y:-4}} animate={{opacity:1,y:0}} className="card p-4 mb-6 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">{customMode?"Custom Section":"Add Section"}</p>
+        <button onClick={close} className="btn-ghost p-1.5 rounded-lg"><X className="w-4 h-4"/></button>
+      </div>
+      {!customMode?(
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            {ADDABLE_SECTIONS.map(id=>{
+              const m=SECTION_META[id];const Icon=m.icon;
+              const present=sectionOrder.includes(id);
+              return(
+                <button key={id} onClick={()=>{onAddBuiltIn(id);close();}}
+                  className="flex items-center gap-2 p-2.5 border border-gray-100 dark:border-gray-800 rounded-lg text-left hover:border-brand-300 hover:bg-brand-50/30 dark:hover:border-brand-700 dark:hover:bg-brand-900/10 transition-all">
+                  <Icon className="w-4 h-4 text-brand-500 flex-shrink-0"/>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{m.label}</span>
+                    <span className="block text-[10px] text-gray-400 truncate">{!present?"Add section":ENTRY_TEMPLATES[id]?"Add another entry":"Go to section"}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={()=>setCustomMode(true)}
+            className="w-full flex items-center gap-2 p-2.5 border border-dashed border-gray-200 dark:border-gray-700 rounded-lg text-left hover:border-brand-300 hover:bg-brand-50/30 dark:hover:border-brand-700 dark:hover:bg-brand-900/10 transition-all">
+            <LayoutList className="w-4 h-4 text-brand-500 flex-shrink-0"/>
+            <span className="min-w-0">
+              <span className="block text-xs font-semibold text-gray-800 dark:text-gray-200">Custom Section</span>
+              <span className="block text-[10px] text-gray-400 truncate">Publications, Volunteering, Languages, Interests…</span>
+            </span>
+          </button>
+        </>
+      ):(
+        <>
+          <div className="space-y-1">
+            <label className="section-label">Section Title</label>
+            <input autoFocus value={title} onChange={e=>setTitle(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();createCustom();}}}
+              placeholder="e.g. Publications" className="form-input"/>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {CUSTOM_TITLE_SUGGESTIONS.map(t=>(
+              <button key={t} type="button" onClick={()=>setTitle(t)}
+                className="text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-brand-300 hover:text-brand-500 transition-colors">{t}</button>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={()=>setCustomMode(false)} className="btn-ghost text-xs py-1.5 px-3">Back</button>
+            <button onClick={createCustom} disabled={!title.trim()} className="btn-primary text-xs py-1.5 px-4">Create Section</button>
+          </div>
+        </>
+      )}
+    </motion.div>
+  );
+}
+
 /* ── Main Editor Page ── */
 export default function EditorPage(){
-  const{currentResume,setCurrentResume,currentAnalysis}=useAnalysis();
+  const{currentResume,setCurrentResume,currentAnalysis,jdText}=useAnalysis();
   const{user}=useAuth();
   const[showModal,setShowModal]=useState(true);
   const[data,setData]=useState({...DEFAULT});
@@ -246,11 +394,19 @@ export default function EditorPage(){
   const[dragOver,setDragOver]=useState(null);
   const[zoom,setZoom]=useState(0.62); // Part 6: zoom support
   const[fullPreview,setFullPreview]=useState(false);
+  const[saveState,setSaveState]=useState({status:"idle",message:""});
+  const dataRef=useRef(data);dataRef.current=data;
+  const ownUpdate=useRef(null); // the resume object this editor itself stored in context after a save
 
   useEffect(()=>{
+    // A context update made by our own save must not re-hydrate the editor (it would overwrite edits typed
+    // while the save was in flight); any other resume loaded into context hydrates as before.
+    if(currentResume&&currentResume===ownUpdate.current)return;
     if(currentResume?.parsedData){
       setData(prev=>({...prev,...currentResume.parsedData}));
-      if(currentResume.sectionOrder)setSectionOrder(currentResume.sectionOrder);
+      const customIds=(currentResume.parsedData.customSections||[]).map(c=>CUSTOM_SECTION_PREFIX+c.id);
+      setSectionOrder(prev=>normalizeSectionOrder(currentResume.sectionOrder||prev,currentResume.parsedData.customSections));
+      setOpenSections(prev=>new Set([...prev,...customIds]));
       if(currentResume.hiddenSections)setHiddenSections(currentResume.hiddenSections);
       setShowModal(false);
     }
@@ -274,12 +430,26 @@ export default function EditorPage(){
   const handleNew=()=>{setData({...DEFAULT});setSectionOrder([...DEFAULT_SECTION_ORDER]);setHiddenSections([]);setShowModal(false);};
   const handleImportData=(pd)=>{setData(prev=>({...prev,...pd}));};
 
-  const handleSave=async()=>{
-    if(!currentResume?._id)return;
-    setSaving(true);
-    try{await resumeAPI.update(currentResume._id,{parsedData:data,sectionOrder,hiddenSections});}
-    catch{}finally{setSaving(false);}
+  // Persist through the existing update endpoint and keep the shared context in sync with what was saved, so
+  // returning to the editor (or an analysis "Edit" link) shows the saved resume, not the one loaded earlier.
+  const persist=async(next)=>{
+    const res=await resumeAPI.update(currentResume._id,{parsedData:next,sectionOrder,hiddenSections});
+    const saved={...currentResume,...(res.data?.resume||{parsedData:next})};
+    ownUpdate.current=saved;setCurrentResume(saved);
+    setSaveState({status:"saved",message:"Saved"});
   };
+  const notStoredReason=!user?"sign in and save to keep it"
+    :!currentResume?._id?"this resume isn't stored in your account (created here or imported without saving), so it can't be saved":"";
+  const handleSave=async()=>{
+    if(!currentResume?._id){setSaveState({status:"error",message:`Not saved: ${notStoredReason}.`});return;}
+    setSaving(true);setSaveState({status:"saving",message:""});
+    try{await persist(data);}
+    catch(err){setSaveState({status:"error",message:`Save failed — your changes are still in the editor. ${err?.userMessage||err?.message||""}`.trim()});}
+    finally{setSaving(false);}
+  };
+  // Accepted suggestions: editor state → live preview → save; rolled back and retryable if the save fails.
+  const commitChange=(next,change)=>commitResumeChange({next,change,setData,getData:()=>dataRef.current,notStoredReason,
+    persist:async n=>{try{await persist(n);}catch(err){setSaveState({status:"error",message:"Save failed — the suggestion was undone."});throw err;}}});
 
   /* Part 10: drag-and-drop section ordering — same technique as before */
   const handleDragStart=(e,id)=>{e.dataTransfer.setData("sectionId",id);};
@@ -295,11 +465,43 @@ export default function EditorPage(){
     setDragOver(null);
   };
 
+  /* Add Section */
+  const focusSection=(id)=>{
+    setOpenSections(prev=>new Set(prev).add(id));
+    setHiddenSections(prev=>prev.filter(x=>x!==id));
+    setTimeout(()=>document.getElementById(`editor-section-${id}`)?.scrollIntoView({behavior:"smooth",block:"start"}),60);
+  };
+  const addBuiltInSection=(id)=>{
+    if(!sectionOrder.includes(id))setSectionOrder(prev=>[...prev,id]);
+    else if(ENTRY_TEMPLATES[id])addItem(id,ENTRY_TEMPLATES[id]);
+    focusSection(id);
+  };
+  const addCustomSection=(title)=>{
+    const id=uid();
+    setData(p=>({...p,customSections:[...(p.customSections||[]),{id,title,content:""}]}));
+    setSectionOrder(prev=>[...prev,CUSTOM_SECTION_PREFIX+id]);
+    focusSection(CUSTOM_SECTION_PREFIX+id);
+  };
+  const updCustom=(id,field,val)=>setData(p=>({...p,customSections:(p.customSections||[]).map(c=>c.id===id?{...c,[field]:val}:c)}));
+  const removeCustomSection=(id)=>{
+    const key=CUSTOM_SECTION_PREFIX+id;
+    setData(p=>({...p,customSections:(p.customSections||[]).filter(c=>c.id!==id)}));
+    setSectionOrder(prev=>prev.filter(x=>x!==key));
+    setHiddenSections(prev=>prev.filter(x=>x!==key));
+  };
+
   /* Part 9 */
   const toggleVisibility=(id)=>setHiddenSections(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
   const toggleOpen=(id)=>setOpenSections(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
 
-  const improvements=currentAnalysis?.improvements||[];
+  // Defense in depth: analyses stored before the summary fix may still hold "3+ years of experience" text.
+  // Analysis tips: one independent item (id + lifecycle) per tip — an add_skills tip becomes one tip per skill.
+  // Re-initialised only when a different analysis is loaded, never by resume edits.
+  const[tips,tipsDispatch]=useReducer(suggestionsReducer,initialSuggestionsState);
+  const tipSource=useMemo(()=>splitImprovements(currentAnalysis?.improvements||[]),[currentAnalysis]);
+  useEffect(()=>{tipsDispatch({type:"success",suggestions:tipSource});},[tipSource]);
+  // Defense in depth: analyses stored before the summary fix may still hold "3+ years of experience" text.
+  const improvements=tips.items.filter(s=>!unsupportedDurationClaims(s.suggestion,data).length);
   const suggestionsFor=(id)=>improvements.filter(s=>s.section?.toLowerCase().includes(id.toLowerCase()));
 
   if(showModal) return(
@@ -324,9 +526,17 @@ export default function EditorPage(){
             </button>
           )}
         </div>
+        {saveState.message&&(
+          <p role={saveState.status==="error"?"alert":"status"} className={`text-xs -mt-2 mb-3 ${saveState.status==="error"?"text-red-600 dark:text-red-400":"text-green-600 dark:text-green-400"}`}>{saveState.message}</p>
+        )}
+
+        {/* AI Suggestions: evidence-grounded, applied only on Accept, one line at a time */}
+        <SuggestionsPanel data={data} setData={setData} onCommit={commitChange} analysis={currentAnalysis}
+          defaultJobDescription={currentAnalysis?.jobDescription?.rawText||jdText||""}/>
 
         {sectionOrder.map(id=>{
-          const meta=SECTION_META[id];if(!meta)return null;
+          const custom=isCustomId(id)?(data.customSections||[]).find(c=>CUSTOM_SECTION_PREFIX+c.id===id):null;
+          const meta=custom?{label:custom.title||"Custom Section",icon:LayoutList}:SECTION_META[id];if(!meta)return null;
           const isOpen=openSections.has(id);
           const isHidden=hiddenSections.includes(id);
           const sugg=suggestionsFor(id);
@@ -350,7 +560,7 @@ export default function EditorPage(){
             <AccordionSection key={id} id={id} meta={meta} open={isOpen} onToggle={()=>toggleOpen(id)}
               hidden={isHidden} onToggleVisibility={toggleVisibility} badge={badge} draggableProps={draggableProps}
             >
-              {sugg.map((s,i)=><AITip key={i} text={`AI: ${s.suggestion}`} onApply={()=>{if(id==="summary")upd("summary",s.suggestion);}}/>)}
+              {sugg.map(s=><AnalysisTip key={s.id} tip={s} data={data} dispatch={tipsDispatch} onCommit={commitChange}/>)}
 
               {id==="header"&&(
                 <>
@@ -364,11 +574,11 @@ export default function EditorPage(){
                   <div className="pt-1">
                     <p className="section-label mb-2">Professional Links</p>
                     <TwoCol>
-                      <Field label="LinkedIn"   value={data.linkedin}   onChange={v=>upd("linkedin",v)} placeholder="linkedin.com/in/…"/>
-                      <Field label="GitHub"     value={data.github}     onChange={v=>upd("github",v)} placeholder="github.com/…"/>
-                      <Field label="Portfolio"  value={data.portfolio}  onChange={v=>upd("portfolio",v)} placeholder="yoursite.com"/>
-                      <Field label="LeetCode"   value={data.leetcode}   onChange={v=>upd("leetcode",v)} placeholder="leetcode.com/u/…"/>
-                      <Field label="HackerRank" value={data.hackerrank} onChange={v=>upd("hackerrank",v)} placeholder="hackerrank.com/…"/>
+                      <UrlField label="LinkedIn" value={data.linkedin} onChange={v=>upd("linkedin",v)} placeholder="linkedin.com/in/…"/>
+                      <UrlField label="GitHub" value={data.github} onChange={v=>upd("github",v)} placeholder="github.com/…"/>
+                      <UrlField label="Portfolio" value={data.portfolio} onChange={v=>upd("portfolio",v)} placeholder="yoursite.com"/>
+                      <UrlField label="LeetCode" value={data.leetcode} onChange={v=>upd("leetcode",v)} placeholder="leetcode.com/u/…"/>
+                      <UrlField label="HackerRank" value={data.hackerrank} onChange={v=>upd("hackerrank",v)} placeholder="hackerrank.com/…"/>
                     </TwoCol>
                     <div className="mt-3">
                       <p className="section-label mb-2">Other Links</p>
@@ -376,6 +586,7 @@ export default function EditorPage(){
                         <div key={i} className="flex gap-2 mb-2">
                           <input className="form-input w-28" placeholder="Label" value={l.label||""} onChange={e=>{const a=[...(data.otherLinks||[])];a[i]={...a[i],label:e.target.value};upd("otherLinks",a);}}/>
                           <input className="form-input flex-1" placeholder="URL" value={l.url||""} onChange={e=>{const a=[...(data.otherLinks||[])];a[i]={...a[i],url:e.target.value};upd("otherLinks",a);}}/>
+                          {safeHref(l.url)&&<a href={safeHref(l.url)} target="_blank" rel="noopener noreferrer" title={`Open ${safeHref(l.url)}`} className="p-2 text-gray-400 hover:text-brand-500 transition-colors"><ExternalLink className="w-4 h-4"/></a>}
                           <button onClick={()=>{const a=[...(data.otherLinks||[])];a.splice(i,1);upd("otherLinks",a);}} className="p-2 text-gray-400 hover:text-red-500 transition-colors"><X className="w-4 h-4"/></button>
                         </div>
                       ))}
@@ -392,11 +603,8 @@ export default function EditorPage(){
 
               {id==="skills"&&(
                 <>
-                  <ChipInput label="Technical Skills" values={data.skills?.technical||[]} onChange={v=>upd("skills.technical",v)} placeholder="Type a skill, press Enter…"/>
-                  <ChipInput label="Tools & Platforms" values={data.skills?.tools||[]} onChange={v=>upd("skills.tools",v)} placeholder="Docker, Jira, Figma…"/>
-                  <ChipInput label="Cloud" values={data.skills?.cloud||[]} onChange={v=>upd("skills.cloud",v)} placeholder="AWS, Azure, GCP…"/>
+                  <SkillsEditor skills={data.skills} onChange={v=>upd("skills",v)}/>
                   <ChipInput label="Soft Skills" values={data.skills?.soft||[]} onChange={v=>upd("skills.soft",v)} placeholder="Leadership, Communication…"/>
-                  <ChipInput label="Languages (Programming)" values={data.skills?.languages||[]} onChange={v=>upd("skills.languages",v)} placeholder="Python, TypeScript…"/>
                 </>
               )}
 
@@ -420,7 +628,7 @@ export default function EditorPage(){
                       </EntryRow>
                     );
                   })}
-                  <AddBtn label="Add Experience" onClick={()=>addItem("experience",{title:"",company:"",location:"",startDate:"",endDate:"",current:false,bullets:[""]})}/>
+                  <AddBtn label="Add Experience" onClick={()=>addItem("experience",ENTRY_TEMPLATES.experience)}/>
                 </>
               )}
 
@@ -444,7 +652,7 @@ export default function EditorPage(){
                       </EntryRow>
                     );
                   })}
-                  <AddBtn label="Add Education" onClick={()=>addItem("education",{degree:"",institution:"",location:"",startDate:"",endDate:"",gpa:"",honors:""})}/>
+                  <AddBtn label="Add Education" onClick={()=>addItem("education",ENTRY_TEMPLATES.education)}/>
                 </>
               )}
 
@@ -453,20 +661,22 @@ export default function EditorPage(){
                   {(data.projects||[]).map((p,i)=>{
                     const key=`projects:${i}`;
                     return(
-                      <EntryRow key={p.id||i} title={p.name} subtitle={(p.technologies||[]).join(", ")} editing={editingKey===key}
+                      <EntryRow key={p.id||i} title={p.name} subtitle={[p.date,(p.technologies||[]).join(", ")].filter(Boolean).join(" · ")} editing={editingKey===key}
                         onEdit={()=>setEditingKey(editingKey===key?null:key)} onDelete={()=>removeItem("projects",i)}
                       >
                         <TwoCol>
                           <Field label="Project Name"    value={p.name}        onChange={v=>updList("projects",i,"name",v)}/>
                           <Field label="Tech Stack"       value={(p.technologies||[]).join(", ")} onChange={v=>updList("projects",i,"technologies",v.split(",").map(s=>s.trim()))} placeholder="React, Node.js"/>
-                          <Field label="GitHub"           value={p.githubUrl}   onChange={v=>updList("projects",i,"githubUrl",v)} placeholder="github.com/…"/>
-                          <Field label="Live Demo"         value={p.liveDemoUrl} onChange={v=>updList("projects",i,"liveDemoUrl",v)} placeholder="https://…"/>
+                          <Field label="Date"             value={p.date}        onChange={v=>updList("projects",i,"date",v)} placeholder="Mar 2026"/>
+                          <UrlField label="GitHub"        value={p.githubUrl}   onChange={v=>updList("projects",i,"githubUrl",v)} placeholder="github.com/…"/>
+                          <UrlField label="Live Demo"     value={p.liveDemoUrl} onChange={v=>updList("projects",i,"liveDemoUrl",v)} placeholder="https://…"/>
+                          <UrlField label="Additional Link" value={p.additionalUrl} onChange={v=>updList("projects",i,"additionalUrl",v)} placeholder="https://…"/>
                         </TwoCol>
-                        <TextareaField label="Description" value={p.description} onChange={v=>updList("projects",i,"description",v)} rows={3} placeholder="Describe the project, your role, and the impact…"/>
+                        <TextareaField label="Description (one bullet per line)" value={p.description} onChange={v=>updList("projects",i,"description",v)} rows={4} placeholder="Describe the project, your role, and the impact…"/>
                       </EntryRow>
                     );
                   })}
-                  <AddBtn label="Add Project" onClick={()=>addItem("projects",{name:"",description:"",technologies:[],githubUrl:"",liveDemoUrl:"",additionalUrl:""})}/>
+                  <AddBtn label="Add Project" onClick={()=>addItem("projects",ENTRY_TEMPLATES.projects)}/>
                 </>
               )}
 
@@ -483,12 +693,12 @@ export default function EditorPage(){
                           <Field label="Provider"           value={c.provider}       onChange={v=>updList("certifications",i,"provider",v)} placeholder="Amazon Web Services"/>
                           <Field label="Issue Date"         value={c.issueDate}      onChange={v=>updList("certifications",i,"issueDate",v)} placeholder="Jan 2024"/>
                           <Field label="Credential ID"      value={c.credentialId}   onChange={v=>updList("certifications",i,"credentialId",v)} placeholder="Optional"/>
-                          <Field label="Credential URL"     value={c.credentialUrl}  onChange={v=>updList("certifications",i,"credentialUrl",v)} placeholder="https://…" className="sm:col-span-2"/>
+                          <UrlField label="Credential URL"  value={c.credentialUrl}  onChange={v=>updList("certifications",i,"credentialUrl",v)} placeholder="https://…" className="sm:col-span-2"/>
                         </TwoCol>
                       </EntryRow>
                     );
                   })}
-                  <AddBtn label="Add Certification" onClick={()=>addItem("certifications",{name:"",provider:"",issueDate:"",credentialId:"",credentialUrl:""})}/>
+                  <AddBtn label="Add Certification" onClick={()=>addItem("certifications",ENTRY_TEMPLATES.certifications)}/>
                 </>
               )}
 
@@ -508,17 +718,30 @@ export default function EditorPage(){
                       </EntryRow>
                     );
                   })}
-                  <AddBtn label="Add Achievement" onClick={()=>addItem("achievements",{title:"",description:"",date:""})}/>
+                  <AddBtn label="Add Achievement" onClick={()=>addItem("achievements",ENTRY_TEMPLATES.achievements)}/>
                 </>
               )}
 
               {id==="additionalInfo"&&(
-                <TextareaField label="Additional Information" value={data.additionalInfo} onChange={v=>upd("additionalInfo",v)} rows={5}
+                <RichTextEditor label="Additional Information" value={data.additionalInfo} onChange={v=>upd("additionalInfo",v)}
                   placeholder="Languages spoken, interests, volunteer work, publications…"/>
+              )}
+
+              {custom&&(
+                <>
+                  <Field label="Section Title" value={custom.title} onChange={v=>updCustom(custom.id,"title",v)} placeholder="e.g. Publications"/>
+                  <RichTextEditor label="Content" value={custom.content} onChange={v=>updCustom(custom.id,"content",v)}
+                    placeholder="Add details — use the toolbar for bullets, numbering and emphasis…"/>
+                  <div className="flex justify-end">
+                    <button onClick={()=>removeCustomSection(custom.id)} className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1 transition-colors"><Trash2 className="w-3.5 h-3.5"/>Remove section</button>
+                  </div>
+                </>
               )}
             </AccordionSection>
           );
         })}
+
+        <AddSectionMenu sectionOrder={sectionOrder} onAddBuiltIn={addBuiltInSection} onAddCustom={addCustomSection}/>
       </div>
 
       {/* ── RIGHT PANEL — 60% — always-visible live preview (Parts 2, 6) ── */}

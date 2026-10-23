@@ -56,6 +56,19 @@
 ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 .dark ::-webkit-scrollbar-thumb { background: #374151; }
 
+/* Rich text (Additional Information + custom sections) — shared by the
+   RichTextEditor and ResumePreview so formatting looks the same in editor,
+   preview and print. Tailwind's preflight strips list markers/margins, so
+   they are restored explicitly here; fonts are inherited from the container
+   (RESUME_FONT in the preview), never set separately. */
+.rich-text ul { list-style: disc; padding-left: 1.4em; margin: 2px 0; }
+.rich-text ol { list-style: decimal; padding-left: 1.4em; margin: 2px 0; }
+.rich-text li { margin-bottom: 2px; }
+.rich-text p { margin: 0; }
+.rich-text b, .rich-text strong { font-weight: 700; }
+.rich-text u { text-decoration: underline; }
+.rich-text-editor:empty::before { content: attr(data-placeholder); color: #9ca3af; pointer-events: none; }
+
 /* TASK 4 FIX: shared print target for the real Export/Download flow.
    #print-resume-root is always mounted (in EditorPage.jsx and
    DashboardPage.jsx) but hidden on screen; @media print hides everything

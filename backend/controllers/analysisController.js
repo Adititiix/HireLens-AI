@@ -2,9 +2,10 @@ const axios    = require("axios");
 const Analysis = require("../models/Analysis");
 const Resume   = require("../models/Resume");
 const User     = require("../models/User");
+const { groundImprovements, groundAnalysis } = require("../utils/suggestionGrounding");
 const NLP = process.env.NLP_SERVICE_URL || "http://localhost:8000";
 
-function mapNLP(nlp, jdText) {
+function mapNLP(nlp, jdText, resumeText = "") {
   const priority = nlp.priority_map || {high:[],medium:[],low:[]};
   const allKw = [...new Set([...(nlp.matched_skills||[]),...(nlp.missing_skills||[]),...(nlp.partial_skills||[])])];
   const keywordOverlap = allKw.map(kw=>({
@@ -13,10 +14,11 @@ function mapNLP(nlp, jdText) {
     category:"technical",
     priority:priority.high.includes(kw)?"high":priority.medium.includes(kw)?"medium":"low",
   }));
-  const improvements=(nlp.suggestions||[]).map(s=>({
+  const improvements=groundImprovements((nlp.suggestions||[]).map(s=>({
     section:s.section||"General",type:s.type||"bullet_rewrite",priority:"medium",
     original:s.original||"",suggestion:s.suggested||s.suggestion||"",reasoning:s.reason||"",applied:false,
-  }));
+    ...(Array.isArray(s.skills)?{skills:s.skills}:{}),
+  })),resumeText);
   const atsIssues=nlp.ats_issues||[];
   return {
     scores:{overall:nlp.match_score||0,ats:nlp.ats_score||0,skillMatch:nlp.keyword_score||0,
@@ -60,7 +62,7 @@ exports.runAnalysis = async(req,res)=>{
   try{
     const{data:nlp}=await axios.post(`${NLP}/analyze`,
       {resume_text:resume.rawText,job_description:jdText},{timeout:60000});
-    const mapped=mapNLP(nlp,jdText);
+    const mapped=mapNLP(nlp,jdText,resume.rawText);
     Object.assign(analysis,mapped);analysis.status="completed";await analysis.save();
     await User.findByIdAndUpdate(req.user._id,{$inc:{analysisCount:1}});
     res.json({success:true,analysis});
@@ -74,7 +76,8 @@ exports.getAnalysis=async(req,res)=>{
   try{
     const a=await Analysis.findOne({resume:req.params.resumeId,user:req.user._id,status:"completed"}).sort({createdAt:-1});
     if(!a)return res.status(404).json({error:"No completed analysis found."});
-    res.json({success:true,analysis:a});
+    const r=await Resume.findById(a.resume,"rawText").lean();
+    res.json({success:true,analysis:groundAnalysis(a,r?.rawText)});
   }catch(err){res.status(500).json({error:"Failed to fetch analysis."});}
 };
 
@@ -92,14 +95,19 @@ exports.getAnalysisById = async (req, res) => {
     const a = await Analysis.findOne({
       _id: req.params.id,
       user: req.user._id,
-    }).populate("resume", "fileName parsedData");
+    }).populate("resume", "fileName parsedData rawText");
 
     if (!a) {
       return res.status(404).json({ error: "Analysis not found." });
     }
 
-    res.json({ success: true, analysis: a });
+    // rawText is needed only to ground stored suggestions — it is not sent back.
+    const analysis = groundAnalysis(a, a.resume?.rawText);
+    if (analysis.resume && typeof analysis.resume === "object") delete analysis.resume.rawText;
+    res.json({ success: true, analysis });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch analysis." });
   }
 };
+
+exports.mapNLP = mapNLP; // exported for tests

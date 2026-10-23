@@ -4,6 +4,7 @@ const improvementSchema = new mongoose.Schema({
   section:String,type:String,
   priority:{type:String,enum:["high","medium","low"],default:"medium"},
   original:String,suggestion:String,reasoning:String,
+  skills:[String], // ADDITIVE: add_skills tips list the job-description skills individually (user confirms each)
   applied:{type:Boolean,default:false},
 },{_id:false});
 

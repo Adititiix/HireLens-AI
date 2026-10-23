@@ -5,7 +5,8 @@ const expSchema = new mongoose.Schema({id:String,title:String,company:String,loc
 const eduSchema = new mongoose.Schema({id:String,degree:String,institution:String,location:String,
   startDate:String,endDate:String,gpa:String,honors:String},{_id:false});
 const projSchema = new mongoose.Schema({id:String,name:String,description:String,technologies:[String],
-  githubUrl:String,liveDemoUrl:String,additionalUrl:String},{_id:false});
+  githubUrl:String,liveDemoUrl:String,additionalUrl:String,
+  date:String},{_id:false}); // ADDITIVE: project date as written on the resume ("Mar 2026")
 const certSchema = new mongoose.Schema({id:String,name:String,provider:String,issueDate:String,
   credentialId:String,credentialUrl:String},{_id:false});
 const achSchema = new mongoose.Schema({id:String,title:String,description:String,date:String},{_id:false});
@@ -13,6 +14,9 @@ const achSchema = new mongoose.Schema({id:String,title:String,description:String
 // LeetCode/Codeforces/HackerRank/Medium/Behance/Custom). Existing `label`/`url` keys are untouched
 // so previously saved documents remain fully valid — this is purely additive, nothing renamed.
 const linkSchema = new mongoose.Schema({type:String,label:String,url:String},{_id:false});
+// ADDITIVE: user-created editor sections ("+ Add Section" → Custom Section). `content` is
+// sanitized rich-text HTML; the section's position lives in sectionOrder as "custom:<id>".
+const customSectionSchema = new mongoose.Schema({id:String,title:String,content:String},{_id:false});
 
 const resumeSchema = new mongoose.Schema({
   userId:{type:mongoose.Schema.Types.ObjectId,ref:"User",required:true,index:true},
@@ -33,6 +37,7 @@ const resumeSchema = new mongoose.Schema({
     },
     experience:[expSchema],education:[eduSchema],projects:[projSchema],
     certifications:[certSchema],achievements:[achSchema],additionalInfo:String,
+    customSections:[customSectionSchema],
   },
   sectionOrder:{type:[String],default:["header","summary","skills","experience","projects",
     "certifications","education","achievements","additionalInfo"]},

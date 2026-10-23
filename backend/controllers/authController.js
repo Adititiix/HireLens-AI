@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const { generateToken } = require("../middleware/auth");
 const admin = require("../config/firebaseAdmin");
+const { describeGoogleAuthError } = require("../utils/googleAuthErrors");
 const register=async(req,res)=>{
   try{
     const{name,email,password}=req.body;
@@ -44,7 +45,9 @@ const googleLogin = async (req, res) => {
       });
     }
 
-    let user = await User.findOne({ email });
+    // Emails are stored lowercased (User schema) — look up the same way, or a Google
+    // address with capitals would miss its account and hit a duplicate-key error on create.
+    let user = await User.findOne({ email: email.toLowerCase() });
 
     if (!user) {
       user = await User.create({
@@ -77,11 +80,11 @@ const googleLogin = async (req, res) => {
       user: user.toJSON(),
     });
   } catch (err) {
-    console.error("Google Login:", err);
+    const { status, code, error } = describeGoogleAuthError(err);
+    // Log the cause (Firebase code + message) — never the ID token itself.
+    console.error(`Google Login failed [${code}]: ${err.code || err.name || "error"} — ${String(err.message || "").split("\n")[0]}`);
 
-    res.status(401).json({
-      error: "Google authentication failed.",
-    });
+    res.status(status).json({ error, code });
   }
 };
 const getMe=(req,res)=>res.json({user:req.user});

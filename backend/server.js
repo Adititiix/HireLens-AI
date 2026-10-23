@@ -1,4 +1,6 @@
-require("dotenv").config();
+// Load backend/.env regardless of the directory the server is started from — must run
+// before any route import, because config/firebaseAdmin.js reads FIREBASE_PROJECT_ID on load.
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 const express=require("express"),cors=require("cors"),helmet=require("helmet"),
   morgan=require("morgan"),mongoose=require("mongoose"),path=require("path"),
   fs=require("fs"),rateLimit=require("express-rate-limit");
@@ -20,6 +22,8 @@ const generalLimiter=rateLimit({windowMs:15*60*1000,max:100,standardHeaders:true
 app.use("/api/",generalLimiter);
 const analysisLimiter=rateLimit({windowMs:60*60*1000,max:30,message:{error:"Analysis limit reached. Please try again in an hour."}});
 app.use("/api/analysis/run",analysisLimiter);
+const suggestionsLimiter=rateLimit({windowMs:60*60*1000,max:60,message:{error:"Suggestion limit reached. Please try again in an hour."}});
+app.use("/api/resume/suggestions",suggestionsLimiter);
 
 app.get("/api/health",(req,res)=>res.json({status:"ok",service:"ResumeIQ v3",timestamp:new Date().toISOString(),mongo:mongoose.connection.readyState===1?"connected":"disconnected"}));
 app.use("/api/auth",authRoutes);
