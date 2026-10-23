@@ -8,6 +8,7 @@ const resumeRoutes=require("./routes/resume"),analysisRoutes=require("./routes/a
   authRoutes=require("./routes/auth"),jobDescRoutes=require("./routes/jobDescription");
 
 const app=express(),PORT=process.env.PORT||5000;
+app.set("trust proxy", 1);
 const uploadsDir=path.join(__dirname,"uploads");
 if(!fs.existsSync(uploadsDir))fs.mkdirSync(uploadsDir,{recursive:true});
 
